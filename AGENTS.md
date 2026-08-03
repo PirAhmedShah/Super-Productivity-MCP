@@ -62,6 +62,7 @@ SP has no IndexedDB indexes on `tagIds`/`projectId` — filtering is always O(n)
 - `npx tsc` pulls a wrong package — always use `npm run typecheck`
 - `npm run build` also runs `build:plugin` (zips `plugin/` → `dist/plugin.zip`) — don't run tsup alone
 - TypeScript 6 requires `"types": ["node"]` in tsconfig (already set) — removing it breaks all `node:` imports
+- Planned time lives in SP's `dueWithTime`, not `plannedAt` (obsolete, always null in current SP). Always read/write `dueWithTime`; responses expose it as `plannedTime`. `update_task`'s canonical param is `due_with_time` (`planned_at` is a deprecated alias).
 
 ## Specs
 

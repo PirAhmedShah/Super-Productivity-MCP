@@ -31,6 +31,47 @@ export function localDateStr(d: Date = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/**
+ * Effective "planned at" timestamp of a task.
+ * SP >= 14.0 stores it in `dueWithTime`; `plannedAt` is the obsolete field (always null in
+ * current SP) kept only as a legacy fallback for old data. ALWAYS read this, never `plannedAt`.
+ */
+export function plannedTimeOf(t: TaskRecord): number | null {
+  return t.dueWithTime ?? t.plannedAt ?? null;
+}
+
+/**
+ * Shape a task for API responses: strip the obsolete `plannedAt` key (its stale null value is a
+ * verification trap) and expose the canonical value as `plannedTime`.
+ */
+export function shapeForResponse(t: TaskRecord): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...t };
+  delete copy.plannedAt;
+  copy.plannedTime = plannedTimeOf(t);
+  return copy;
+}
+
+/** Re-fetch tasks by id after a write so callers get the effective stored values (no silent writes). */
+export async function fetchTasksByIds(
+  dirs: ResolvedDirs,
+  ids: string[],
+): Promise<Record<string, Record<string, unknown> | null>> {
+  const byId: Record<string, Record<string, unknown> | null> = {};
+  if (!ids.length) return byId;
+  for (const id of ids) byId[id] = null;
+  const res = await sendCommand(dirs, 'getTasks', { filters: { includeDone: true, includeArchived: true } });
+  if (!res.success) return byId;
+  for (const t of (res.result as TaskRecord[]) ?? []) {
+    if (t.id in byId) byId[t.id] = shapeForResponse(t);
+  }
+  return byId;
+}
+
+async function fetchTask(dirs: ResolvedDirs, taskId: string): Promise<Record<string, unknown> | null> {
+  const tasks = await fetchTasksByIds(dirs, [taskId]);
+  return tasks[taskId] ?? null;
+}
+
 /** Apply triage filters to a task list. Exported for testability. */
 export function applyTriageFilters(
   tasks: TaskRecord[],
@@ -48,7 +89,7 @@ export function applyTriageFilters(
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const startOfTomorrow = startOfToday + 86_400_000;
     result = result.filter(t => {
-      const p = t.plannedAt;
+      const p = plannedTimeOf(t);
       return p != null && p >= startOfToday && p < startOfTomorrow;
     });
   }
@@ -76,12 +117,12 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
       if (project_id) data.projectId = project_id;
       if (parent_id) data.parentId = parent_id;
 
-      // SP auto-assigns plannedAt/dueDay to today when viewing Today context.
+      // SP auto-assigns dueWithTime/dueDay to today when viewing Today context.
       // Passing null satisfies SP's `'dueDay' in additional` guard, preventing auto-scheduling
       // unless the title contains @date syntax (which SP will parse into a date itself).
       const hasDateSyntax = /@/.test(title);
       if (!hasDateSyntax) {
-        data.plannedAt = null;
+        data.dueWithTime = null;
         data.dueDay = null;
       }
 
@@ -99,7 +140,8 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         await sendCommand(dirs, 'updateTask', { taskId: res.result as string, data: { title } });
       }
 
-      return okResult({ taskId: res.result });
+      const task = await fetchTask(dirs, res.result as string);
+      return okResult({ taskId: res.result, task });
     },
   );
 
@@ -117,9 +159,9 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         parents_only: z.boolean().optional().default(false).describe('Exclude subtasks — return only top-level tasks'),
         overdue: z.boolean().optional().default(false).describe('Return only tasks with a due date strictly before today'),
         unscheduled: z.boolean().optional().default(false).describe('Return only tasks with no due date and no scheduled time'),
-        planned_for_today: z.boolean().optional().default(false).describe('Return only tasks planned for today (via plannedAt timestamp)'),
+        planned_for_today: z.boolean().optional().default(false).describe('Return only tasks planned for today (via dueWithTime timestamp)'),
         recurring_only: z.boolean().optional().default(false).describe('Return only recurring tasks (those with a repeatCfgId)'),
-        fields: z.array(z.string()).optional().describe('Return only these fields per task (e.g. ["id", "title", "dueDay"]). Omit for full objects.'),
+        fields: z.array(z.string()).optional().describe('Return only these fields per task (e.g. ["id", "title", "dueDay"]). Omit for full objects. "plannedTime" returns the effective planned timestamp (SP field dueWithTime); "plannedAt" is a deprecated alias of it.'),
       },
     },
     async ({ project_id, tag_id, include_done, include_archived, search_query, parents_only, overdue, unscheduled, planned_for_today, recurring_only, fields }) => {
@@ -151,13 +193,21 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
       if (fields && fields.length > 0) {
         const shaped = tasks.map(t => {
           const obj: Record<string, unknown> = {};
-          for (const f of fields) { if (f in t) obj[f] = (t as Record<string, unknown>)[f]; }
+          for (const f of fields) {
+            if (f === 'plannedAt' || f === 'plannedTime') {
+              // plannedAt is obsolete/stale; remap both names to the effective value
+              obj[f] = plannedTimeOf(t);
+            } else if (f in t) {
+              obj[f] = (t as Record<string, unknown>)[f];
+            }
+          }
           return obj;
         });
         return okResult(shaped);
       }
 
-      return okResult(tasks);
+      // Full objects: strip obsolete plannedAt, expose canonical plannedTime alias
+      return okResult(tasks.map(shapeForResponse));
     },
   );
 
@@ -172,13 +222,14 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         notes: z.string().optional().describe('New notes'),
         is_done: z.boolean().optional().describe('Mark as done/undone'),
         due_day: z.string().optional().describe('Due date in ISO format (e.g. 2026-04-20), or empty string to clear'),
-        planned_at: z.number().nullable().optional().describe('Unix ms timestamp to plan task for a specific time (e.g. start of today = plan for today). Pass null to unplan. Independent from due_day.'),
+        due_with_time: z.number().nullable().optional().describe('Unix ms timestamp to plan task at an exact time (maps to SP dueWithTime; e.g. Date.now() = "plan from now until next task"). Pass null to unplan. Independent from due_day.'),
+        planned_at: z.number().nullable().optional().describe('DEPRECATED: alias of due_with_time (both map to SP dueWithTime; the legacy plannedAt field is obsolete). Prefer due_with_time.'),
         time_estimate: z.number().optional().describe('Time estimate in milliseconds'),
         time_spent: z.number().optional().describe('Time spent in milliseconds'),
         tag_ids: z.array(z.string()).optional().describe('Bulk-replace all tags with this list (FR-003)'),
       },
     },
-    async ({ task_id, title, notes, is_done, due_day, planned_at, time_estimate, time_spent, tag_ids }) => {
+    async ({ task_id, title, notes, is_done, due_day, due_with_time, planned_at, time_estimate, time_spent, tag_ids }) => {
       if (!task_id?.trim()) return errorResult('task_id is required');
 
       const data: Record<string, unknown> = {};
@@ -189,7 +240,8 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         data.doneOn = is_done ? Date.now() : null;
       }
       if (due_day !== undefined) data.dueDay = due_day || null;
-      if (planned_at !== undefined) data.plannedAt = planned_at;
+      const planned = due_with_time !== undefined ? due_with_time : planned_at;
+      if (planned !== undefined) data.dueWithTime = planned;
       if (time_estimate !== undefined) data.timeEstimate = time_estimate;
       if (time_spent !== undefined) data.timeSpent = time_spent;
       // tag_ids replaces the entire tag list; use add_tag_to_task / remove_tag_from_task for incremental changes
@@ -197,7 +249,8 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
 
       const res = await sendCommand(dirs, 'updateTask', { taskId: task_id, data });
       if (!res.success) return errorResult(res.error ?? 'Failed to update task');
-      return okResult(res.result);
+      const task = await fetchTask(dirs, task_id);
+      return okResult({ taskId: task_id, task });
     },
   );
 
@@ -443,20 +496,26 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
   server.registerTool(
     'plan_tasks_for_today',
     {
-      description: 'Plan multiple tasks for today (adds to Today view) or unplan them. Uses partial-success semantics.',
+      description: 'Plan multiple tasks for today (adds to Today view) or unplan them. By default tasks are pinned to start-of-day (00:00); use plan_from_now for "from now until next task". Uses partial-success semantics.',
       inputSchema: {
         task_ids: z.array(z.string()).max(100).describe('Task IDs to plan/unplan'),
+        plan_from_now: z.boolean().optional().default(false).describe('If true, plans tasks at the current time (Date.now()) instead of start-of-day (00:00). Recommended when an exact start time matters.'),
         unplan: z.boolean().optional().default(false).describe('If true, removes tasks from today instead of planning them'),
       },
     },
-    async ({ task_ids, unplan }) => {
+    async ({ task_ids, plan_from_now, unplan }) => {
       if (!task_ids?.length) return okResult({ results: [] });
       const now = new Date();
-      const plannedAt = unplan ? null : new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      const updates = task_ids.map(id => ({ taskId: id, data: { plannedAt } }));
+      const plannedAt = unplan
+        ? null
+        : plan_from_now
+          ? now.getTime()
+          : new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      const updates = task_ids.map(id => ({ taskId: id, data: { dueWithTime: plannedAt } }));
       const res = await sendCommand(dirs, 'bulkUpdateTasks', { updates });
       if (!res.success) return errorResult(res.error ?? 'Failed to plan tasks');
-      return okResult(res.result);
+      const tasks = await fetchTasksByIds(dirs, task_ids);
+      return okResult({ results: task_ids.map(id => ({ taskId: id, task: tasks[id] ?? null })) });
     },
   );
 

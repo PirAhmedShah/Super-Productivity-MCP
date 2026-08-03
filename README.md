@@ -134,14 +134,14 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 |------|-------------|
 | `create_task` | Create a task (supports SP short syntax) |
 | `create_task_with_subtasks` | Create a parent task + subtasks in one operation |
-| `get_tasks` | List tasks — filter by project, tag, done, archived, search (title+notes), `parents_only`, `overdue`, `unscheduled`, `planned_for_today`, `recurring_only`, `fields` |
-| `update_task` | Update title, notes, done state, due date, `planned_at`, time, tags |
+| `get_tasks` | List tasks — filter by project, tag, done, archived, search (title+notes), `parents_only`, `overdue`, `unscheduled`, `planned_for_today`, `recurring_only`, `fields`. Full objects expose `plannedTime` (the effective planned timestamp, SP `dueWithTime`); `plannedAt` is a deprecated alias |
+| `update_task` | Update title, notes, done state, due date, `due_with_time`, time, tags (`planned_at` is a deprecated alias of `due_with_time`) |
 | `complete_task` | Mark a task as complete |
 | `delete_task` | Permanently delete a task (parent deletes subtasks too) |
 | `start_task` | Start the time tracker on a task |
 | `stop_task` | Stop the currently running time tracker |
 | `get_current_task` | Get the currently tracked task (null if none) |
-| `plan_tasks_for_today` | Batch plan/unplan tasks for today ⚠️ [limited](#known-limitations) |
+| `plan_tasks_for_today` | Batch plan/unplan tasks for today (pins to 00:00; `plan_from_now` plans at the current time) ⚠️ [limited](#known-limitations) |
 | `bulk_complete_tasks` | Mark multiple tasks complete in one operation |
 | `bulk_update_tasks` | Update multiple tasks in one operation |
 | `add_tag_to_task` | Add a tag without replacing other tags |
@@ -187,7 +187,14 @@ Include these in task titles and they are parsed automatically:
 
 | Tool | Issue | Status |
 |------|-------|--------|
-| `plan_tasks_for_today` | Sets `plannedAt` on the task but does not add it to SP's internal Planner store, so the task may not appear in the Today view. | Upstream request: [super-productivity#7495](https://github.com/super-productivity/super-productivity/issues/7495) |
+| `plan_tasks_for_today` | Sets `dueWithTime` on the task but does not add it to SP's internal Planner store, so the task may not appear in the Today view. | Upstream request: [super-productivity#7495](https://github.com/super-productivity/super-productivity/issues/7495) |
+
+## Scheduling semantics (planned time)
+
+- The "planned at" time of a task lives in SP's `dueWithTime` field. The legacy `plannedAt` field is obsolete and always `null` in current SP — never read or write it.
+- `update_task { due_with_time: <unix ms> }` sets the exact planned time (`Date.now()` = "from now until next task"); `null` unplans.
+- `plan_tasks_for_today` pins tasks to start-of-day (00:00). Use `plan_from_now: true` when an exact start time matters.
+- To verify a write, read the task's `plannedTime` (alias of `dueWithTime`) from the write response or `get_tasks` — the tools return the resulting task so bad input is caught immediately.
 
 ## License
 

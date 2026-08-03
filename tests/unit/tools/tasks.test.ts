@@ -6,7 +6,7 @@ vi.mock('../../../src/ipc/command-sender.js', () => ({
 }));
 
 import { sendCommand } from '../../../src/ipc/command-sender.js';
-import { applyTriageFilters, localDateStr } from '../../../src/tools/tasks.js';
+import { applyTriageFilters, fetchTasksByIds, localDateStr, plannedTimeOf, shapeForResponse } from '../../../src/tools/tasks.js';
 import type { ResolvedDirs } from '../../../src/ipc/directories.js';
 import type { Response } from '../../../src/ipc/types.js';
 
@@ -307,10 +307,10 @@ describe('task tool logic', () => {
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const tasks = [
-      { id: '1', title: 'Planned today', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: null, timeEstimate: 0, timeSpent: 0, plannedAt: startOfToday + 3600000 },
-      { id: '2', title: 'Planned yesterday', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: null, timeEstimate: 0, timeSpent: 0, plannedAt: startOfToday - 86400000 },
-      { id: '3', title: 'Not planned', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: null, timeEstimate: 0, timeSpent: 0, plannedAt: null },
-      { id: '4', title: 'Subtask planned today', isDone: false, projectId: null, tagIds: [], parentId: 'p-1', dueDay: null, dueWithTime: null, timeEstimate: 0, timeSpent: 0, plannedAt: startOfToday + 1000 },
+      { id: '1', title: 'Planned today', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: startOfToday + 3600000, timeEstimate: 0, timeSpent: 0 },
+      { id: '2', title: 'Planned yesterday', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: startOfToday - 86400000, timeEstimate: 0, timeSpent: 0 },
+      { id: '3', title: 'Not planned', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: null, timeEstimate: 0, timeSpent: 0 },
+      { id: '4', title: 'Subtask planned today', isDone: false, projectId: null, tagIds: [], parentId: 'p-1', dueDay: null, dueWithTime: startOfToday + 1000, timeEstimate: 0, timeSpent: 0 },
     ];
 
     it('returns only tasks planned for today', () => {
@@ -323,7 +323,7 @@ describe('task tool logic', () => {
       expect(result.find(t => t.id === '2')).toBeUndefined();
     });
 
-    it('excludes tasks with null plannedAt', () => {
+    it('excludes tasks with null dueWithTime', () => {
       const result = applyTriageFilters(tasks, { plannedForToday: true });
       expect(result.find(t => t.id === '3')).toBeUndefined();
     });
@@ -331,6 +331,60 @@ describe('task tool logic', () => {
     it('combines with parents_only (AND logic)', () => {
       const result = applyTriageFilters(tasks, { plannedForToday: true, parentsOnly: true });
       expect(result.map(t => t.id)).toEqual(['1']);
+    });
+
+    it('falls back to legacy plannedAt when dueWithTime is absent', () => {
+      const legacy = [
+        { id: 'L1', title: 'Legacy today', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, timeEstimate: 0, timeSpent: 0, plannedAt: startOfToday + 5000 },
+        { id: 'L2', title: 'Legacy none', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, timeEstimate: 0, timeSpent: 0, plannedAt: null },
+      ];
+      const result = applyTriageFilters(legacy, { plannedForToday: true });
+      expect(result.map(t => t.id)).toEqual(['L1']);
+    });
+  });
+
+  // B2/B3: planned time helpers — canonical dueWithTime, legacy fallback, response shaping
+  describe('plannedTimeOf / shapeForResponse', () => {
+    it('returns dueWithTime as the effective planned time', () => {
+      expect(plannedTimeOf({ id: '1', dueWithTime: 1745150400000, plannedAt: null } as any)).toBe(1745150400000);
+    });
+
+    it('falls back to legacy plannedAt only when dueWithTime is missing', () => {
+      expect(plannedTimeOf({ id: '1', plannedAt: 1745150400000 } as any)).toBe(1745150400000);
+    });
+
+    it('returns null when neither field is set', () => {
+      expect(plannedTimeOf({ id: '1' } as any)).toBeNull();
+    });
+
+    it('shapeForResponse strips stale plannedAt and exposes plannedTime alias', () => {
+      const shaped = shapeForResponse({ id: '1', title: 'T', dueWithTime: 1745150400000, plannedAt: null, isDone: false, projectId: 'p1', tagIds: [] } as any);
+      expect(shaped.plannedTime).toBe(1745150400000);
+      expect('plannedAt' in shaped).toBe(false);
+      expect(shaped.id).toBe('1');
+    });
+  });
+
+  // B3: write echo — re-fetch returns shaped task with effective planned time
+  describe('fetchTasksByIds', () => {
+    it('returns shaped tasks keyed by id with plannedTime', async () => {
+      mockSend.mockResolvedValueOnce(mockResponse([
+        { id: 't1', title: 'A', dueWithTime: 1745150400000, plannedAt: null, isDone: false, projectId: 'p1', tagIds: [], timeEstimate: 0, timeSpent: 0 },
+        { id: 't2', title: 'B', dueWithTime: null, plannedAt: null, isDone: false, projectId: 'p1', tagIds: [], timeEstimate: 0, timeSpent: 0 },
+      ]));
+      const byId = await fetchTasksByIds(dirs, ['t1', 't2']);
+      expect(byId['t1']?.plannedTime).toBe(1745150400000);
+      expect(byId['t2']?.plannedTime).toBeNull();
+      expect('plannedAt' in (byId['t1'] as object)).toBe(false);
+      expect(mockSend).toHaveBeenCalledWith(dirs, 'getTasks', {
+        filters: { includeDone: true, includeArchived: true },
+      });
+    });
+
+    it('returns null entries for ids not found', async () => {
+      mockSend.mockResolvedValueOnce(mockResponse([]));
+      const byId = await fetchTasksByIds(dirs, ['ghost']);
+      expect(byId['ghost']).toBeNull();
     });
   });
 
