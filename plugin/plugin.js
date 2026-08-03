@@ -1,4 +1,6 @@
 // MCP Bridge Plugin for Super Productivity
+// Keep PLUGIN_VERSION in sync with manifest.json "version".
+const PLUGIN_VERSION = '1.3.6';
 const PROTOCOL_VERSION = 1;
 const POLL_INTERVAL_MS = 2000;
 let commandDir = null;
@@ -20,14 +22,29 @@ function assertNodeResult(result, context) {
 }
 
 // Parse @date short syntax (e.g. "@today 6pm", "@monday", "@3days") out of a task title
-// since PluginAPI.addTask doesn't process it. Returns the computed dueDay (or null) and the
+// since PluginAPI.addTask doesn't process it. Returns the computed dueDay (or null), a
+// dueWithTime (unix ms of the due date at the given local time, only when a time token is
+// present — plain "@friday" sets the due date but leaves the planned time untouched), and the
 // title with the @syntax stripped. The trailing time token (HH, HH:MM, with optional am/pm) is
 // only consumed when not immediately followed by a letter/digit, so duration syntax like
 // "6h/11h" or "14h" isn't mistaken for a bare hour and partially eaten.
 function parseAtDateSyntax(title, now = new Date()) {
   const dateMatch = title.match(/@(\S+)(?:\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?![a-zA-Z0-9]))?/i);
   let dueDay = null;
+  let dueWithTime = null;
   const localDateStr = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  const parseTime = (token) => {
+    // "3pm" -> 15:00, "12am" -> 00:00, "12pm" -> 12:00, "6" -> 06:00, "09:30" -> 09:30
+    const m = token.trim().toLowerCase().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/);
+    if (!m) return null;
+    let hour = parseInt(m[1], 10);
+    const minute = m[2] ? parseInt(m[2], 10) : 0;
+    const meridiem = m[3];
+    if (meridiem === 'pm' && hour < 12) hour += 12;
+    if (meridiem === 'am' && hour === 12) hour = 0;
+    if (hour > 23 || minute > 59) return null;
+    return { hour, minute };
+  };
   if (dateMatch) {
     const keyword = dateMatch[1].toLowerCase();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -49,13 +66,20 @@ function parseAtDateSyntax(title, now = new Date()) {
         dueDay = localDateStr(today);
       }
     }
+    if (dueDay && dateMatch[2]) {
+      const t = parseTime(dateMatch[2]);
+      if (t) {
+        const [y, mo, d] = dueDay.split('-').map(Number);
+        dueWithTime = new Date(y, mo - 1, d, t.hour, t.minute).getTime();
+      }
+    }
   }
 
   const cleanTitle = dueDay
     ? title.replace(/@\S+(\s+\d{1,2}(:\d{2})?\s*(am|pm)?(?![a-zA-Z0-9]))?/i, ' ').replace(/\s+/g, ' ').trim()
     : title;
 
-  return { dueDay, cleanTitle };
+  return { dueDay, dueWithTime, cleanTitle };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -219,7 +243,7 @@ async function executeCommand(command) {
 
         // Parse @date syntax since PluginAPI.addTask doesn't process short syntax.
         // Use local date formatting (not toISOString which converts to UTC and shifts the day in positive timezones).
-        const { dueDay, cleanTitle } = parseAtDateSyntax(title);
+        const { dueDay, dueWithTime, cleanTitle } = parseAtDateSyntax(title);
 
         const hasParent = !!d.parentId;
         const hasSyntax = hasParent && /[#\+]/.test(title);
@@ -233,9 +257,11 @@ async function executeCommand(command) {
         }
 
         // Set dueDay only — dueWithTime (planned time) is independent (due date ≠ planned for today).
+        // When a time token was given ("@tomorrow 3pm"), set the exact planned time too.
         // Clear both when no @date syntax so inbox tasks don't inherit stale schedules.
         if (result && dueDay) {
-          await PluginAPI.updateTask(result, { dueDay });
+          const extra = dueWithTime != null ? { dueWithTime } : {};
+          await PluginAPI.updateTask(result, { dueDay, ...extra });
         } else if (result) {
           await PluginAPI.updateTask(result, { dueWithTime: null, dueDay: null });
         }
@@ -476,7 +502,7 @@ async function executeCommand(command) {
         break;
       }
       case 'ping':
-        result = { pong: true, pluginVersion: '1.3.5', protocolVersion: PROTOCOL_VERSION };
+        result = { pong: true, pluginVersion: PLUGIN_VERSION, protocolVersion: PROTOCOL_VERSION };
         break;
       default:
         return { success: false, error: `Unknown command action: ${command.action}`, timestamp: Date.now() };

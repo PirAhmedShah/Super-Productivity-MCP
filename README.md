@@ -157,7 +157,8 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 | `get_task_repeat_cfgs` | List all recurring task configurations (schedule, cadence, day-of-week settings) |
 | `get_worklog` | Time tracking summary for a date range |
 | `show_notification` | Show a snackbar in SP's UI |
-| `check_connection` | Verify SP is running and the plugin is responding |
+| `get_time` | Current machine date/time (local tz) — `epochMs`, `iso`, `localDate`, `localTime`, `dayOfWeek`, `timezone` |
+| `check_connection` | Verify SP is running and the plugin is responding (also returns `serverNow`) |
 | `debug_directories` | Show resolved data directory paths |
 
 ## SP Short Syntax
@@ -169,7 +170,7 @@ Include these in task titles and they are parsed automatically:
 | `#tag` | `Buy milk #shopping` | Adds the "shopping" tag |
 | `+project` | `Fix bug +work` | Assigns to "work" project (prefix match, min 3 chars) |
 | `@due` | `Report @friday` | Sets due date to Friday |
-| `@due time` | `Call @tomorrow 3pm` | Sets due date and time |
+| `@due time` | `Call @tomorrow 3pm` | Sets due date and exact planned time (local) |
 | `30m` | `Quick fix 30m` | Sets 30-minute time estimate |
 | `1h/2h` | `Research 1h/2h` | Sets 1h spent, 2h estimate |
 
@@ -192,8 +193,10 @@ Include these in task titles and they are parsed automatically:
 ## Scheduling semantics (planned time)
 
 - The "planned at" time of a task lives in SP's `dueWithTime` field. The legacy `plannedAt` field is obsolete and always `null` in current SP — never read or write it.
-- `update_task { due_with_time: <unix ms> }` sets the exact planned time (`Date.now()` = "from now until next task"); `null` unplans.
+- Get the current wall clock with `get_time` (or `check_connection.serverNow`) — `epochMs` is ready for scheduling; do not shell out to `date`.
+- `update_task { due_with_time: <unix ms> }` sets the exact planned time (`get_time`'s `epochMs` = "from now until next task"); `null` unplans. `planned_at` is a deprecated alias.
 - `plan_tasks_for_today` pins tasks to start-of-day (00:00). Use `plan_from_now: true` when an exact start time matters.
+- `@friday 3pm` in a title sets the due date and the exact planned time; `@friday` sets the due date only.
 - To verify a write, read the task's `plannedTime` (alias of `dueWithTime`) from the write response or `get_tasks` — the tools return the resulting task so bad input is caught immediately.
 
 ## License
