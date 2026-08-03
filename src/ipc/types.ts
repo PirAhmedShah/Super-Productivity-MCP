@@ -15,6 +15,8 @@ export interface Command {
   contextType?: 'project' | 'parent';
   // Fields for bulkUpdateTasks (003-FR-009)
   updates?: Array<{ taskId: string; data: Record<string, unknown> }>;
+  // Fields for addTimeToday (agent-driven time tracking)
+  ms?: number;
 }
 
 export interface TaskFilters {

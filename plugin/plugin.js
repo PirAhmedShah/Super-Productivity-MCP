@@ -432,9 +432,9 @@ async function executeCommand(command) {
         break;
       }
       case 'startTask': {
-        // PluginAPI has no native timer control method, and dispatchAction has a whitelist
-        // that doesn't include task actions. Instead, we use updateTask to set currentTimestamp
-        // which is how SP internally tracks the active timer.
+        // Marker-only: records which task the agent is working on (task.currentTimestamp).
+        // The live UI timer can't be driven reliably from a plugin (SP's ticker throttles in
+        // unfocused windows), so actual time accounting is done agent-side via addTimeToday.
         const allTasksForStart = await PluginAPI.getTasks();
         const taskForStart = allTasksForStart.find(t => t.id === command.taskId);
         if (!taskForStart) {
@@ -461,6 +461,30 @@ async function executeCommand(command) {
         }
         // Idempotent — no error if nothing is being tracked
         result = null;
+        break;
+      }
+      case 'addTimeToday': {
+        // Agent-driven time tracking: add ms to today's bucket (timeSpentOnDay[today]) AND the
+        // total (timeSpent). The worklog sums timeSpentOnDay, so writing timeSpent alone would
+        // show the number but not the report. Mirrors SP's own addTimeSpent accounting.
+        const allTasksForTime = await PluginAPI.getTasks();
+        const taskForTime = allTasksForTime.find(t => t.id === command.taskId);
+        if (!taskForTime) {
+          return { success: false, error: `Task not found: ${command.taskId}`, timestamp: Date.now() };
+        }
+        const ms = Number(command.ms);
+        if (!isFinite(ms) || ms < 0) {
+          return { success: false, error: `Invalid ms: ${command.ms}`, timestamp: Date.now() };
+        }
+        const now = new Date();
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const timeSpentOnDay = Object.assign({}, taskForTime.timeSpentOnDay || {});
+        timeSpentOnDay[today] = (timeSpentOnDay[today] || 0) + ms;
+        await PluginAPI.updateTask(command.taskId, {
+          timeSpentOnDay,
+          timeSpent: (taskForTime.timeSpent || 0) + ms,
+        });
+        result = { timeSpentOnDay, timeSpent: (taskForTime.timeSpent || 0) + ms };
         break;
       }
       case 'deleteTask': {

@@ -463,6 +463,31 @@ describe('task tool logic', () => {
     });
   });
 
+  // add_time_today — agent-driven time tracking
+  describe('add_time_today via sendCommand', () => {
+    it('sends addTimeToday with taskId and ms', async () => {
+      mockSend.mockResolvedValueOnce(mockResponse({ timeSpentOnDay: {}, timeSpent: 300000 }));
+      const res = await sendCommand(dirs, 'addTimeToday', { taskId: 'task-1', ms: 300000 });
+      expect(res.success).toBe(true);
+      expect(res.result).toEqual({ timeSpentOnDay: {}, timeSpent: 300000 });
+      expect(mockSend).toHaveBeenCalledWith(dirs, 'addTimeToday', { taskId: 'task-1', ms: 300000 });
+    });
+
+    it('propagates error when task not found', async () => {
+      mockSend.mockResolvedValueOnce({ success: false, error: 'Task not found: task-x', timestamp: Date.now() });
+      const res = await sendCommand(dirs, 'addTimeToday', { taskId: 'task-x', ms: 1000 });
+      expect(res.success).toBe(false);
+      expect(res.error).toMatch('Task not found');
+    });
+
+    it('propagates error on invalid ms', async () => {
+      mockSend.mockResolvedValueOnce({ success: false, error: 'Invalid ms: -5', timestamp: Date.now() });
+      const res = await sendCommand(dirs, 'addTimeToday', { taskId: 'task-1', ms: -5 });
+      expect(res.success).toBe(false);
+      expect(res.error).toMatch('Invalid ms');
+    });
+  });
+
   // Bulk array max(100) validation
   describe('bulk operations array limits', () => {
     it('bulk_complete_tasks schema rejects >100 items', () => {

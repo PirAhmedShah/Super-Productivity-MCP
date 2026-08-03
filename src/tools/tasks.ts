@@ -354,6 +354,30 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
     },
   );
 
+  // add_time_today (agent-driven time tracking — add elapsed ms to a task's today bucket)
+  // SP's live ticker can't be driven reliably from a plugin (window throttling), so the agent
+  // keeps its own wall-clock timer and writes the result here. The worklog sums timeSpentOnDay,
+  // so we must update that field (and timeSpent) — NOT just timeSpent.
+  server.registerTool(
+    'add_time_today',
+    {
+      description:
+        'Add elapsed milliseconds to a task for today. Use for agent-driven time tracking: the agent records its own start time, then on completion or at end-of-day calls this to write the elapsed time into the task. Updates both the per-day bucket (timeSpentOnDay[today], which the worklog reads) and the total timeSpent. Returns the updated task.',
+      inputSchema: {
+        task_id: z.string().describe('Task ID to add time to'),
+        ms: z.number().int().nonnegative().describe('Elapsed milliseconds to add'),
+      },
+    },
+    async ({ task_id, ms }) => {
+      if (!task_id?.trim()) return errorResult('task_id is required');
+      if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return errorResult('ms must be a non-negative number');
+      const res = await sendCommand(dirs, 'addTimeToday', { taskId: task_id, ms });
+      if (!res.success) return errorResult(res.error ?? 'Failed to add time');
+      const task = await fetchTask(dirs, task_id);
+      return okResult({ taskId: task_id, task, addedMs: ms });
+    },
+  );
+
   // bulk_complete_tasks (003-FR-008 — mark multiple tasks done in one round-trip)
   server.registerTool(
     'bulk_complete_tasks',
