@@ -11,6 +11,8 @@ import { registerTimeTools } from './tools/time.js';
 import { registerScheduleTools } from './tools/schedule.js';
 import { registerBatchTools } from './tools/batch.js';
 import { registerContextTools } from './tools/context.js';
+import { registerStateTools } from './tools/state.js';
+import { registerCounterTools } from './tools/counters.js';
 import { registerResources } from './resources/index.js';
 
 export function createServer(): { server: McpServer; dirs: ResolvedDirs } {
@@ -31,6 +33,8 @@ export function createServer(): { server: McpServer; dirs: ResolvedDirs } {
   registerScheduleTools(server, dirs);
   registerBatchTools(server, dirs);
   registerContextTools(server, dirs);
+  registerStateTools(server, dirs);
+  registerCounterTools(server, dirs);
   registerResources(server, dirs);
 
   return { server, dirs };
