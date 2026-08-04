@@ -36,7 +36,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/b0x42/Super-Productivity-MCP.git"
+    "url": "git+https://github.com/PirAhmedShah/Super-Productivity-MCP.git"
   },
   "overrides": {
     "ip-address": ">=10.2.0"
