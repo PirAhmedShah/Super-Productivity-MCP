@@ -1,6 +1,6 @@
 // MCP Bridge Plugin for Super Productivity
 // Keep PLUGIN_VERSION in sync with manifest.json "version".
-const PLUGIN_VERSION = '1.6.0';
+const PLUGIN_VERSION = '1.7.0';
 const PROTOCOL_VERSION = 1;
 const POLL_INTERVAL_MS = 2000;
 let commandDir = null;
@@ -554,6 +554,76 @@ async function executeCommand(command) {
         result = Object.values(cfgMap);
         break;
       }
+      case 'batchUpdateForProject': {
+        // Atomic multi-op write for one project (SP 18.x): create/update/delete/reorder in a
+        // single transaction. tempId can be referenced by later operations (parents, reorder).
+        result = await PluginAPI.batchUpdateForProject(command.data || {});
+        break;
+      }
+      case 'getActiveWorkContext': {
+        // Which work context (project / tag / TODAY) is currently active in the UI.
+        result = await PluginAPI.getActiveWorkContext();
+        break;
+      }
+      case 'getCurrentContextTasks': {
+        // Tasks currently rendered in the active work context.
+        result = await PluginAPI.getCurrentContextTasks();
+        break;
+      }
+      case 'getSelectedTask': {
+        // Task currently open in the detail panel (null when none).
+        result = await PluginAPI.getSelectedTask();
+        break;
+      }
+      case 'getFocusedTask': {
+        // Task row currently focused by the user (transient; null when none).
+        result = await PluginAPI.getFocusedTask();
+        break;
+      }
+      case 'selectTask': {
+        // Open a task (or subtask) in SP's detail panel.
+        await PluginAPI.selectTask(command.taskId);
+        result = null;
+        break;
+      }
+      case 'getAllCounters':
+        result = await PluginAPI.getAllCounters();
+        break;
+      case 'getCounter':
+        result = await PluginAPI.getCounter(command.counterId);
+        break;
+      case 'setCounter':
+        await PluginAPI.setCounter(command.counterId, Number(command.value));
+        result = null;
+        break;
+      case 'incrementCounter':
+        result = await PluginAPI.incrementCounter(command.counterId, command.incrementBy != null ? Number(command.incrementBy) : undefined);
+        break;
+      case 'decrementCounter':
+        result = await PluginAPI.decrementCounter(command.counterId, command.decrementBy != null ? Number(command.decrementBy) : undefined);
+        break;
+      case 'deleteCounter':
+        await PluginAPI.deleteCounter(command.counterId);
+        result = null;
+        break;
+      case 'reInitData':
+        // Force SP to reload persisted data (useful after agent-side file changes).
+        await PluginAPI.reInitData();
+        result = null;
+        break;
+      case 'getConfig':
+        // The plugin's own optional configuration (null unless a config handler is registered).
+        result = await PluginAPI.getConfig();
+        break;
+      case 'getNotes': {
+        if (typeof PluginAPI.getAppState !== 'function') {
+          return { success: false, error: 'getAppState unavailable on this Super Productivity build; cannot read notes.', timestamp: Date.now() };
+        }
+        const state = await PluginAPI.getAppState();
+        const notesMap = (state && state.notes) || {};
+        result = Object.values(notesMap);
+        break;
+      }
       case 'ping':
         result = { pong: true, pluginVersion: PLUGIN_VERSION, protocolVersion: PROTOCOL_VERSION, appVersion: (typeof PluginAPI.cfg !== 'undefined' && PluginAPI.cfg && PluginAPI.cfg.appVersion) || null };
         break;
@@ -651,4 +721,15 @@ if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onReady === 'function')
   PluginAPI.onReady(init);
 } else if (typeof PluginAPI !== 'undefined') {
   setTimeout(init, 500);
+}
+
+// onUnload (SP 18.16+): this is a code plugin, so the poll timer/listeners would otherwise
+// keep running after disable/reload/uninstall. Clear state so the next init() starts clean.
+if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onUnload === 'function') {
+  PluginAPI.onUnload(() => {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    lastProcessed = 0;
+    commandDir = null;
+    responseDir = null;
+  });
 }
