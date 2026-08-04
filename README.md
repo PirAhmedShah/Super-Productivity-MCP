@@ -25,6 +25,11 @@ Filters, bulk-updates due dates, and adds tags — all in one conversation turn.
 
 Reads resources for context, creates subtasks in batch, starts the timer, bulk-completes tasks, pulls the worklog, and summarizes — a multi-step workflow in a single prompt.
 
+**🗓️ Time-Aware Planning**
+> "Show me today as a timeline — what overlaps, what's due but unplanned, and what I already finished"
+
+`get_schedule` returns the day as time blocks (start = planned time, size = estimate) with conflict clusters, unscheduled tasks, and completed work in one call; `sp://context` bootstraps a whole session — server time, projects, tags, today's schedule, overdue, current task — in a single read.
+
 → [More use cases](docs/use-cases.md)
 
 ## Installation
@@ -37,7 +42,7 @@ npx -y super-productivity-mcp@latest --extract-plugin
 ```
 
 **Option B — manual download:**
-Download `plugin.zip` from the [latest release](https://github.com/b0x42/Super-Productivity-MCP/releases/latest).
+Download `plugin.zip` from the [latest release](https://github.com/PirAhmedShah/Super-Productivity-MCP/releases/latest).
 
 Then in Super Productivity: **Settings → Plugins → Upload Plugin**, select `plugin.zip`, restart SP.
 
@@ -101,7 +106,7 @@ If the binary isn't found, your MCP client may not inherit your shell's `PATH`. 
 ### Option B — From source
 
 ```bash
-git clone https://github.com/b0x42/Super-Productivity-MCP.git
+git clone https://github.com/PirAhmedShah/Super-Productivity-MCP.git
 cd Super-Productivity-MCP
 npm install
 npm run build              # produces dist/index.js and dist/plugin.zip
@@ -142,6 +147,7 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 | `delete_task` | Permanently delete a task (parent deletes subtasks too) |
 | `start_task` | Start the time tracker on a task |
 | `stop_task` | Stop the currently running time tracker |
+| `add_time_today` | Add elapsed milliseconds to a task's today bucket — agent-driven time tracking (`timeSpentOnDay[today]`, which the worklog sums, plus `timeSpent`). Returns the updated task |
 | `get_current_task` | Get the currently tracked task (null if none) |
 | `plan_tasks_for_today` | Batch plan/unplan tasks for today (pins to 00:00; `plan_from_now` plans at the current time) ⚠️ [limited](#known-limitations) |
 | `bulk_complete_tasks` | Mark multiple tasks complete in one operation |
@@ -215,9 +221,10 @@ Include these in task titles and they are parsed automatically:
 
 - The "planned at" time of a task lives in SP's `dueWithTime` field. The legacy `plannedAt` field is obsolete and always `null` in current SP — never read or write it.
 - A task's **size** is its `timeEstimate` (duration) and its **start** is its planned time. `get_schedule` combines the two into a timeline: `startMs = plannedTime`, `endMs = startMs + timeEstimate`.
-- `get_schedule` reports **overlap conflict clusters** — transitively-connected groups of tasks whose scheduled windows intersect. Only open tasks with both a planned time and a positive estimate participate; intervals that merely touch at a boundary are not overlaps. `get_tasks { overlapping: true }` returns just the tasks involved in a conflict.
+- `get_schedule` reports **overlap conflict clusters** — transitively-connected groups of tasks whose scheduled windows intersect. Only open tasks with both a planned time and a positive estimate participate; intervals that merely touch at a boundary are not overlaps. `get_tasks { overlapping: true }` returns just the tasks involved in a conflict. Completed tasks land in `completedInRange` only — never double-listed in `scheduled` (with `include_done`), so the summary counts stay consistent.
 - Derived per-task `status`: `done` → `unsized` (no planned time) → `past` (now ≥ end) → `in-progress` (now ≥ start) → `upcoming`.
 - Get the current wall clock with `get_time` (or `check_connection.serverNow`) — `epochMs` is ready for scheduling; do not shell out to `date`.
+- **Time tracking is agent-driven:** `start_task` / `stop_task` only set a tracking marker (SP's live ticker can't be driven reliably from a plugin due to window throttling). To record real elapsed time, compute `elapsed = now − start` and call `add_time_today { task_id, ms }`, which writes `timeSpentOnDay[today]` (what `get_worklog` sums) and `timeSpent`.
 - `update_task { due_with_time: <unix ms> }` sets the exact planned time (`get_time`'s `epochMs` = "from now until next task"); `null` unplans. `planned_at` is a deprecated alias.
 - `plan_tasks_for_today` pins tasks to start-of-day (00:00). Use `plan_from_now: true` when an exact start time matters.
 - `@friday 3pm` in a title sets the due date and the exact planned time; `@friday` sets the due date only.
