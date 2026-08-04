@@ -1,8 +1,40 @@
 import { describe, it, expect } from 'vitest';
-import { parseAtDateSyntax } from '../../../plugin/plugin.js';
+import { parseAtDateSyntax, stripResidualDateTokens } from '../../../plugin/plugin.js';
 
 // Fixed reference date: Wednesday 2026-07-15
 const NOW = new Date(2026, 6, 15, 10, 0, 0);
+
+describe('stripResidualDateTokens', () => {
+  // Regression: SP 18.16+ short-syntax parsing (chrono) consumes date-like @tokens from the
+  // titles of plugin-created tasks (the plugin bridge can't disable it), so the plugin must
+  // neutralize them deterministically to avoid mangling + dueDay clobbering.
+  it('strips a residual literal @date token', () => {
+    expect(stripResidualDateTokens('[test] @date regression live')).toBe('[test] regression live');
+  });
+
+  it('strips weekday/month/relative date-like tokens', () => {
+    expect(stripResidualDateTokens('a @monday b @friday c')).toBe('a b c');
+    expect(stripResidualDateTokens('x @jan y @dec z')).toBe('x y z');
+    expect(stripResidualDateTokens('x @may y')).toBe('x y');
+    expect(stripResidualDateTokens('x @tomorrow y @today')).toBe('x y');
+    expect(stripResidualDateTokens('x @noon y @midnight')).toBe('x y');
+  });
+
+  it('preserves non-date @tokens', () => {
+    expect(stripResidualDateTokens('email @dave about @tag')).toBe('email @dave about @tag');
+    expect(stripResidualDateTokens('@home @work')).toBe('@home @work');
+  });
+
+  it('leaves plain titles and nulls untouched', () => {
+    expect(stripResidualDateTokens('buy milk')).toBe('buy milk');
+    expect(stripResidualDateTokens(null)).toBeNull();
+    expect(stripResidualDateTokens('')).toBe('');
+  });
+
+  it('collapses whitespace after stripping mid-title tokens', () => {
+    expect(stripResidualDateTokens('buy @date milk')).toBe('buy milk');
+  });
+});
 
 describe('parseAtDateSyntax', () => {
   it('leaves title untouched when there is no @date syntax', () => {

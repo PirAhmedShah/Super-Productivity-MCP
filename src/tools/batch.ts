@@ -21,7 +21,7 @@ const batchCreateSchema = z.object({
 
 const batchUpdateSchema = z.object({
   type: z.literal('update'),
-  task_id: z.string().describe('Task ID to update'),
+  task_id: z.string().describe('REAL task ID to update (temp_ids of same-batch creates are silently skipped by SP; use the id from createdTaskIds in a follow-up call)'),
   updates: z.object({
     title: z.string().optional(),
     notes: z.string().optional(),
@@ -34,7 +34,7 @@ const batchUpdateSchema = z.object({
 
 const batchDeleteSchema = z.object({
   type: z.literal('delete'),
-  task_id: z.string().describe('Task ID to delete'),
+  task_id: z.string().describe('REAL task ID to delete (temp_ids of same-batch creates are silently skipped by SP; use the id from createdTaskIds in a follow-up call)'),
 });
 
 const batchReorderSchema = z.object({
@@ -84,10 +84,10 @@ export function registerBatchTools(server: McpServer, dirs: ResolvedDirs): void 
     'batch_update_project',
     {
       description:
-        'Apply atomic multi-operation changes to one project in Super Productivity in a single transaction (create/update/delete/reorder). Unlike bulk_update_tasks (plain per-task updates), this supports references: give new tasks a temp_id and later ops can use it as parent_id or in reorder task_ids. On partial failure SP returns per-operation errors; treated as a single write.',
+        'Apply atomic multi-operation changes to one project in Super Productivity in a single transaction (create/update/delete/reorder). Unlike bulk_update_tasks (plain per-task updates), this supports references: give new tasks a temp_id and later ops in the SAME call may use it as parent_id or inside reorder task_ids / sub_task_ids. IMPORTANT (SP limitation): update and delete ops only resolve REAL task IDs — to update/delete a task you just created in this batch, run a second call and pass its id from this call\'s createdTaskIds. On partial failure SP drops skipped ops silently (logged server-side), so verify the result.',
       inputSchema: {
         project_id: z.string().describe('Project ID to apply the operations to'),
-        operations: z.array(batchOperationSchema).min(1).describe('Operations to apply, in order'),
+        operations: z.array(batchOperationSchema).min(1).describe('Operations to apply, in order. temp_id/tempIds resolve only for create-parent/reorder/subTaskIds; update/delete need real ids (two-phase pattern).'),
       },
     },
     async ({ project_id, operations }) => {

@@ -99,8 +99,20 @@ function parseAtDateSyntax(title, now = new Date()) {
   return { dueDay, dueWithTime, cleanTitle };
 }
 
+// SP 18.16+ runs its own short-syntax parser (chrono, see ShortSyntaxEffects) on the titles of
+// plugin-created/updated tasks — the plugin bridge cannot disable it (PluginCreateTaskData has
+// no isIgnoreShortSyntax, and typia.assert rejects unknown fields). A leftover date-like @token
+// that parseAtDateSyntax intentionally keeps in cleanTitle (e.g. a literal "@date") would get
+// re-parsed by SP, clobbering our dueDay and mangling the title. Neutralize deterministically
+// before handing the title to SP. Non-date tokens ("@dave", "@tag") are preserved.
+function stripResidualDateTokens(rawTitle) {
+  if (!rawTitle) return rawTitle;
+  const RE = /\s*@(date|today|tomorrow|tonight|now|noon|midnight|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec|morning|afternoon|evening)(?=\s|$)/gi;
+  return rawTitle.replace(RE, ' ').replace(/\s+/g, ' ').trim();
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseAtDateSyntax };
+  module.exports = { parseAtDateSyntax, stripResidualDateTokens };
 }
 
 async function setupDirectories() {
@@ -261,16 +273,19 @@ async function executeCommand(command) {
         // Parse @date syntax since PluginAPI.addTask doesn't process short syntax.
         // Use local date formatting (not toISOString which converts to UTC and shifts the day in positive timezones).
         const { dueDay, dueWithTime, cleanTitle } = parseAtDateSyntax(title);
+        // SP 18.16+ short-syntax parsing can't be disabled for plugin tasks, so re-scrub any
+        // residual date-like @token (e.g. a literal "@date") before SP sees the title.
+        const safeTitle = stripResidualDateTokens(cleanTitle);
 
         const hasParent = !!d.parentId;
         const hasSyntax = hasParent && /[#\+]/.test(title);
         if (hasSyntax) {
           const parentClean = title.replace(/\s*[#\+]\S+/g, '').trim() || title;
           const taskId = await PluginAPI.addTask({ ...d, title: parentClean });
-          await PluginAPI.updateTask(taskId, { title });
+          await PluginAPI.updateTask(taskId, { title: stripResidualDateTokens(title) });
           result = taskId;
         } else {
-          result = await PluginAPI.addTask({ ...d, title: cleanTitle });
+          result = await PluginAPI.addTask({ ...d, title: safeTitle });
         }
 
         // Set dueDay only — dueWithTime (planned time) is independent (due date ≠ planned for today).
@@ -297,6 +312,9 @@ async function executeCommand(command) {
       }
       case 'updateTask': {
         const updateData = command.data || {};
+        // Title-only updates re-run SP's short-syntax parser (SP 18.16+), so scrub residual
+        // date-like @tokens the same way as on create.
+        if (updateData.title) updateData.title = stripResidualDateTokens(updateData.title);
         // SP auto-sets the planned time (dueWithTime) when dueDay changes. Preserve existing
         // value unless the caller explicitly included dueWithTime in the update.
         if ('dueDay' in updateData && !('dueWithTime' in updateData)) {
@@ -517,7 +535,7 @@ async function executeCommand(command) {
       case 'createTaskWithSubtasks': {
         const parentData = command.data || {};
         const parentId = await PluginAPI.addTask({
-          title: parentData.title,
+          title: stripResidualDateTokens(parentData.title),
           notes: parentData.notes || '',
           projectId: parentData.projectId || undefined,
           tagIds: parentData.tagIds || [],
@@ -525,13 +543,22 @@ async function executeCommand(command) {
         const subtaskIds = [];
         for (const sub of (parentData.subtasks || [])) {
           const subId = await PluginAPI.addTask({
-            title: sub.title,
+            title: stripResidualDateTokens(sub.title),
             notes: sub.notes || '',
             parentId,
           });
           subtaskIds.push(subId);
         }
         result = { parentId, subtaskIds };
+        break;
+      }
+      case 'getAppState': {
+        // Full state snapshot (tasks, projects, tags, taskRepeatCfgs, notes, counters, config...).
+        if (typeof PluginAPI.getAppState !== 'function') {
+          const appVersion = (typeof PluginAPI.cfg !== 'undefined' && PluginAPI.cfg && PluginAPI.cfg.appVersion) || 'unknown';
+          return { success: false, error: `getAppState unavailable on this Super Productivity build (appVersion: ${appVersion}). Requires SP from 2026-05-26 or later (PR #7803).`, timestamp: Date.now() };
+        }
+        result = await PluginAPI.getAppState();
         break;
       }
       case 'getTaskRepeatCfgs': {

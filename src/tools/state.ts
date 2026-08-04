@@ -8,6 +8,18 @@ import { errorResult, okResult } from './result.js';
 
 // Full app-state snapshot, notes, and lifecycle tools backed by SP 18.16 plugin API.
 
+/** SP returns app state as id-keyed maps; expose arrays to MCP consumers (consistent with get_projects/get_tags). Exported for testability. */
+export function toArrays(state: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...state };
+  for (const key of ['tasks', 'projects', 'tags', 'notes', 'taskRepeatCfgs', 'simpleCounters'] as const) {
+    const v = out[key];
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      out[key] = Object.values(v as Record<string, unknown>);
+    }
+  }
+  return out;
+}
+
 export function registerStateTools(server: McpServer, dirs: ResolvedDirs): void {
   server.registerTool(
     'get_app_state',
@@ -21,7 +33,7 @@ export function registerStateTools(server: McpServer, dirs: ResolvedDirs): void 
     async ({ output_path }) => {
       const res = await sendCommand(dirs, 'getAppState', {});
       if (!res.success) return errorResult(res.error ?? 'Failed to get app state');
-      const state = res.result ?? null;
+      const state = toArrays((res.result as Record<string, unknown> | null) ?? {});
       let savedTo: string | null = null;
       if (output_path) {
         try {

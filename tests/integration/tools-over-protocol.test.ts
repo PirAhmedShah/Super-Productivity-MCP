@@ -263,23 +263,30 @@ describe('integration: tools over the MCP protocol', () => {
     }
   });
 
-  it('get_app_state passes the full snapshot through', async () => {
+  it('get_app_state normalizes SP maps into arrays', async () => {
     mockSend.mockResolvedValueOnce(mockResponse({
-      tasks: [task({ id: 't1' })],
-      projects: PROJECTS,
-      tags: TAGS,
-      notes: [{ id: 'n1', content: 'hello' }],
+      tasks: { t1: task({ id: 't1' }) },
+      projects: { p1: PROJECTS[0] },
+      tags: { t1: TAGS[0] },
+      notes: { n1: { id: 'n1', content: 'hello' } },
+      taskRepeatCfgs: {},
+      simpleCounters: { c1: { value: 1 } },
+      globalConfig: {},
     }));
     const c = await withServer([]);
     try {
       const msg = await c.call('get_app_state', {});
       expect(msg.result.isError).toBeFalsy();
       const payload = JSON.parse(msg.result.content[0].text);
+      expect(Array.isArray(payload.state.tasks)).toBe(true);
       expect(payload.state.tasks[0].id).toBe('t1');
-      expect(payload.state.projects).toHaveLength(1);
-      expect(payload.state.tags).toHaveLength(1);
+      expect(Array.isArray(payload.state.projects)).toBe(true);
+      expect(payload.state.projects[0].id).toBe('p1');
+      expect(Array.isArray(payload.state.tags)).toBe(true);
+      expect(Array.isArray(payload.state.notes)).toBe(true);
       expect(payload.state.notes[0].content).toBe('hello');
       expect(payload.savedTo).toBeNull();
+      expect(payload.state.globalConfig).toEqual({});
     } finally {
       await c.close();
     }
