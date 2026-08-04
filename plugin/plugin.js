@@ -1,6 +1,6 @@
 // MCP Bridge Plugin for Super Productivity
 // Keep PLUGIN_VERSION in sync with manifest.json "version".
-const PLUGIN_VERSION = '1.5.2';
+const PLUGIN_VERSION = '1.6.0';
 const PROTOCOL_VERSION = 1;
 const POLL_INTERVAL_MS = 2000;
 let commandDir = null;
@@ -28,10 +28,11 @@ function assertNodeResult(result, context) {
 // title with the @syntax stripped. The trailing time token (HH, HH:MM, with optional am/pm) is
 // only consumed when not immediately followed by a letter/digit, so duration syntax like
 // "6h/11h" or "14h" isn't mistaken for a bare hour and partially eaten.
+//
+// Only the FIRST @token whose keyword resolves to a valid date is applied; any earlier
+// @word that isn't a date (e.g. a literal "@date" or a handle like "@dave") is skipped,
+// so it can't shadow a real date later in the title.
 function parseAtDateSyntax(title, now = new Date()) {
-  const dateMatch = title.match(/@(\S+)(?:\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?![a-zA-Z0-9]))?/i);
-  let dueDay = null;
-  let dueWithTime = null;
   const localDateStr = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
   const parseTime = (token) => {
     // "3pm" -> 15:00, "12am" -> 00:00, "12pm" -> 12:00, "6" -> 06:00, "09:30" -> 09:30
@@ -45,38 +46,54 @@ function parseAtDateSyntax(title, now = new Date()) {
     if (hour > 23 || minute > 59) return null;
     return { hour, minute };
   };
-  if (dateMatch) {
-    const keyword = dateMatch[1].toLowerCase();
+  const resolveDay = (keyword) => {
+    const kw = keyword.toLowerCase();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    if (keyword === 'today' || keyword === '0days') {
-      dueDay = localDateStr(today);
-    } else if (keyword === 'tomorrow' || keyword === '1days') {
-      today.setDate(today.getDate() + 1);
-      dueDay = localDateStr(today);
-    } else if (/^\d+days?$/.test(keyword)) {
-      const days = parseInt(keyword);
-      today.setDate(today.getDate() + days);
-      dueDay = localDateStr(today);
-    } else {
-      const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-      const idx = dayNames.indexOf(keyword);
-      if (idx !== -1) {
-        const diff = (idx - now.getDay() + 7) % 7 || 7;
-        today.setDate(today.getDate() + diff);
-        dueDay = localDateStr(today);
-      }
+    if (kw === 'today' || kw === '0days') {
+      return localDateStr(today);
     }
-    if (dueDay && dateMatch[2]) {
-      const t = parseTime(dateMatch[2]);
+    if (kw === 'tomorrow' || kw === '1days') {
+      today.setDate(today.getDate() + 1);
+      return localDateStr(today);
+    }
+    if (/^\d+days?$/.test(kw)) {
+      today.setDate(today.getDate() + parseInt(kw, 10));
+      return localDateStr(today);
+    }
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const idx = dayNames.indexOf(kw);
+    if (idx !== -1) {
+      const diff = (idx - now.getDay() + 7) % 7 || 7;
+      today.setDate(today.getDate() + diff);
+      return localDateStr(today);
+    }
+    return null;
+  };
+
+  let dueDay = null;
+  let dueWithTime = null;
+  let matchStart = -1;
+  let matchEnd = -1;
+  const tokenRe = /@(\S+)(?:\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?![a-zA-Z0-9]))?/gi;
+  let m;
+  while ((m = tokenRe.exec(title)) !== null) {
+    matchStart = m.index;
+    matchEnd = tokenRe.lastIndex;
+    const day = resolveDay(m[1]);
+    if (!day) continue;
+    dueDay = day;
+    if (m[2]) {
+      const t = parseTime(m[2]);
       if (t) {
         const [y, mo, d] = dueDay.split('-').map(Number);
         dueWithTime = new Date(y, mo - 1, d, t.hour, t.minute).getTime();
       }
     }
+    break;
   }
 
   const cleanTitle = dueDay
-    ? title.replace(/@\S+(\s+\d{1,2}(:\d{2})?\s*(am|pm)?(?![a-zA-Z0-9]))?/i, ' ').replace(/\s+/g, ' ').trim()
+    ? (title.slice(0, matchStart) + ' ' + title.slice(matchEnd)).replace(/\s+/g, ' ').trim()
     : title;
 
   return { dueDay, dueWithTime, cleanTitle };
@@ -518,6 +535,18 @@ async function executeCommand(command) {
         break;
       }
       case 'getTaskRepeatCfgs': {
+        // PluginAPI.getAppState (which carries taskRepeatCfgs) only exists in SP builds
+        // from 2026-05-26+ (super-productivity PR #7803). On older builds no other API
+        // exposes repeat configs (tasks only carry repeatCfgId), so fail with an
+        // actionable error instead of crashing on a missing method.
+        if (typeof PluginAPI.getAppState !== 'function') {
+          const appVersion = (typeof PluginAPI.cfg !== 'undefined' && PluginAPI.cfg && PluginAPI.cfg.appVersion) || 'unknown';
+          return {
+            success: false,
+            error: `getAppState unavailable on this Super Productivity build (appVersion: ${appVersion}). Reading task repeat configs requires SP from 2026-05-26 or later (getAppState API, PR #7803). Until then, use get_tasks with recurring_only to list tasks that have a repeatCfgId.`,
+            timestamp: Date.now(),
+          };
+        }
         const state = await PluginAPI.getAppState();
         // SP stores taskRepeatCfgs as { [id]: cfg } — convert to array so MCP consumers
         // don't need to know the internal map shape (consistent with get_projects / get_tags).
@@ -526,7 +555,7 @@ async function executeCommand(command) {
         break;
       }
       case 'ping':
-        result = { pong: true, pluginVersion: PLUGIN_VERSION, protocolVersion: PROTOCOL_VERSION };
+        result = { pong: true, pluginVersion: PLUGIN_VERSION, protocolVersion: PROTOCOL_VERSION, appVersion: (typeof PluginAPI.cfg !== 'undefined' && PluginAPI.cfg && PluginAPI.cfg.appVersion) || null };
         break;
       default:
         return { success: false, error: `Unknown command action: ${command.action}`, timestamp: Date.now() };

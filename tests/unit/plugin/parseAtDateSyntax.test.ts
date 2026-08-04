@@ -91,4 +91,46 @@ describe('parseAtDateSyntax', () => {
   it('collapses the double space left after stripping a mid-title @date token', () => {
     expect(parseAtDateSyntax('buy @today milk', NOW).cleanTitle).toBe('buy milk');
   });
+
+  // Regression: BR-2026-08-05-01 — a non-date @word earlier in the title used to shadow
+  // the real @date token because the parser only looked at the first @token.
+  it('skips a non-date @word that precedes @date syntax', () => {
+    expect(parseAtDateSyntax('[test] @date syntax check @tomorrow 3pm', NOW)).toEqual({
+      dueDay: '2026-07-16',
+      dueWithTime: new Date(2026, 6, 16, 15, 0, 0).getTime(),
+      cleanTitle: '[test] @date syntax check',
+    });
+  });
+
+  it('skips a non-date @word before bare @date syntax', () => {
+    expect(parseAtDateSyntax('[test] @date bare syntax @tomorrow', NOW)).toEqual({
+      dueDay: '2026-07-16',
+      dueWithTime: null,
+      cleanTitle: '[test] @date bare syntax',
+    });
+  });
+
+  it('skips @handle tokens that are not date keywords', () => {
+    expect(parseAtDateSyntax('email @dave about @monday', NOW)).toEqual({
+      dueDay: '2026-07-20',
+      dueWithTime: null,
+      cleanTitle: 'email @dave about',
+    });
+  });
+
+  it('uses the first resolvable date when several @tokens are present', () => {
+    expect(parseAtDateSyntax('@today then @tomorrow', NOW)).toEqual({
+      dueDay: '2026-07-15',
+      dueWithTime: null,
+      cleanTitle: 'then @tomorrow',
+    });
+  });
+
+  it('leaves the title untouched when only non-date @words are present', () => {
+    expect(parseAtDateSyntax('note @date is not a date @foo 6pm', NOW)).toEqual({
+      dueDay: null,
+      dueWithTime: null,
+      cleanTitle: 'note @date is not a date @foo 6pm',
+    });
+  });
 });

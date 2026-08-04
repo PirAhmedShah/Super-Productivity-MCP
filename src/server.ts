@@ -17,7 +17,7 @@ export function createServer(): { server: McpServer; dirs: ResolvedDirs } {
 
   const server = new McpServer({
     name: 'super-productivity',
-    version: '1.5.2',
+    version: '1.6.0',
   });
 
   registerTaskTools(server, dirs);
