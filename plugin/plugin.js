@@ -1,6 +1,6 @@
 // MCP Bridge Plugin for Super Productivity
 // Keep PLUGIN_VERSION in sync with manifest.json "version".
-const PLUGIN_VERSION = '1.5.1';
+const PLUGIN_VERSION = '1.5.2';
 const PROTOCOL_VERSION = 1;
 const POLL_INTERVAL_MS = 2000;
 let commandDir = null;

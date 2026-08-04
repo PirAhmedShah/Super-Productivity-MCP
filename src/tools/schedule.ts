@@ -197,12 +197,13 @@ export async function buildScheduleView(dirs: ResolvedDirs, opts: ScheduleViewOp
         const doneDay = localDateStr(new Date(t.doneOn));
         if (doneDay >= startDate && doneDay <= endDate) completedInRange.push(scheduleItem(t, now));
       }
+      continue;
     }
     const start = plannedTimeOf(t);
     if (start != null) {
       const startDay = localDateStr(new Date(start));
       if (startDay >= startDate && startDay <= endDate) scheduled.push(scheduleItem(t, now));
-    } else if (!t.isDone && t.dueDay && t.dueDay >= startDate && t.dueDay <= endDate) {
+    } else if (t.dueDay && t.dueDay >= startDate && t.dueDay <= endDate) {
       unscheduledInRange.push(scheduleItem(t, now));
     }
   }

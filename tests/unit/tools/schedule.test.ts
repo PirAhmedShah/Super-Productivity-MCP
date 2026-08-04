@@ -119,6 +119,19 @@ describe('findOverlaps', () => {
     expect(clusters[0].count).toBe(3);
   });
 
+  it('a long interval bridges: task touching the cluster edge still joins via a real overlap', () => {
+    // c[10:00-10:30] touches a's end (10:00) but genuinely overlaps the long b[9:30-10:45] —
+    // the bridge must include c, not split the cluster at the touch point.
+    const clusters = findOverlaps([
+      item('a', NINE_AM, NINE_AM + HOUR),
+      item('b', NINE_AM + 30 * 60 * 1000, NINE_AM + 105 * 60 * 1000),
+      item('c', NINE_AM + HOUR, NINE_AM + 90 * 60 * 1000),
+    ]);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].taskIds).toEqual(['a', 'b', 'c']);
+    expect(clusters[0].toMs).toBe(NINE_AM + 105 * 60 * 1000);
+  });
+
   it('splits disjoint clusters into separate groups', () => {
     const clusters = findOverlaps([
       item('a', NINE_AM, NINE_AM + HOUR),
