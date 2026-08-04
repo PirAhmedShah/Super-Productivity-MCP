@@ -165,7 +165,7 @@ Rationale: The two components are distributed and updated independently. Without
 ## Distribution
 
 - The MCP server MUST be publishable as an npm package and runnable via `npx`.
-- The MCP client configuration entry should be: `{"command": "npx", "args": ["-y", "super-productivity-mcp"]}` (or equivalent with the chosen package name).
+- The MCP client configuration entry should be: `{"command": "npx", "args": ["-y", "@pir-ahmed-shah/super-productivity-mcp"]}` (or equivalent with the chosen package name).
 - The SP plugin MUST be distributed as a `plugin.zip` file attached to GitHub releases.
 - A setup guide in the README MUST cover: installing the plugin in SP, configuring the MCP client, and verifying the connection with `check_connection`.
 

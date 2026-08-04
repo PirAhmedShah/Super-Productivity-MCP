@@ -45,7 +45,7 @@ Override the auto-detected path via `SP_MCP_DATA_DIR` in your MCP client config:
   "mcpServers": {
     "super-productivity": {
       "command": "npx",
-      "args": ["-y", "super-productivity-mcp"],
+      "args": ["-y", "@pir-ahmed-shah/super-productivity-mcp"],
       "env": {
         "SP_MCP_DATA_DIR": "/path/to/super-productivity-mcp"
       }

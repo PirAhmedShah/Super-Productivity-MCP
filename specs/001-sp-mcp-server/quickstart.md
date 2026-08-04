@@ -22,7 +22,7 @@ Add to your MCP client configuration:
   "mcpServers": {
     "super-productivity": {
       "command": "npx",
-      "args": ["-y", "super-productivity-mcp"]
+      "args": ["-y", "@pir-ahmed-shah/super-productivity-mcp"]
     }
   }
 }
@@ -63,7 +63,7 @@ If SP is installed via Snap or Mac App Store, the plugin auto-detects the correc
   "mcpServers": {
     "super-productivity": {
       "command": "npx",
-      "args": ["-y", "super-productivity-mcp"],
+      "args": ["-y", "@pir-ahmed-shah/super-productivity-mcp"],
       "env": {
         "SP_MCP_DATA_DIR": "/custom/path/to/data"
       }

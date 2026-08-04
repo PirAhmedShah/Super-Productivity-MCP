@@ -38,7 +38,7 @@ Reads resources for context, creates subtasks in batch, starts the timer, bulk-c
 
 **Option A — via npx:**
 ```bash
-npx -y super-productivity-mcp@latest --extract-plugin
+npx -y @pir-ahmed-shah/super-productivity-mcp@latest --extract-plugin
 ```
 
 **Option B — manual download:**
@@ -55,7 +55,7 @@ Then in Super Productivity: **Settings → Plugins → Upload Plugin**, select `
   "mcpServers": {
     "super-productivity": {
       "command": "npx",
-      "args": ["-y", "super-productivity-mcp"]
+      "args": ["-y", "@pir-ahmed-shah/super-productivity-mcp"]
     }
   }
 }
@@ -69,10 +69,10 @@ For **Claude Code**, don't edit the config file by hand — use the CLI:
 
 ```bash
 # user scope (everywhere), project scope (-s project), or local scope (default)
-claude mcp add -s user super-productivity npx -- -y super-productivity-mcp
+claude mcp add -s user super-productivity npx -- -y @pir-ahmed-shah/super-productivity-mcp
 ```
 
-To verify, run `claude mcp list`. Restart the session to load the server. Swap `npx -- -y super-productivity-mcp` for `super-productivity-mcp` (global install) or `node /absolute/path/to/dist/index.js` (from source) — see [Running without npx](#running-without-npx).
+To verify, run `claude mcp list`. Restart the session to load the server. Swap `npx -- -y @pir-ahmed-shah/super-productivity-mcp` for `super-productivity-mcp` (global install) or `node /absolute/path/to/dist/index.js` (from source) — see [Running without npx](#running-without-npx).
 
 ### 3. Verify
 
@@ -85,7 +85,7 @@ Ask your AI assistant: *"Check the Super Productivity connection"*
 ### Option A — Global install
 
 ```bash
-npm install -g super-productivity-mcp
+npm install -g @pir-ahmed-shah/super-productivity-mcp
 super-productivity-mcp --extract-plugin   # optional: write plugin.zip to cwd
 ```
 
