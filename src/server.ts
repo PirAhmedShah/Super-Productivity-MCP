@@ -8,6 +8,7 @@ import { registerTagTools } from './tools/tags.js';
 import { registerNotificationTools } from './tools/notifications.js';
 import { registerDiagnosticTools } from './tools/diagnostics.js';
 import { registerTimeTools } from './tools/time.js';
+import { registerScheduleTools } from './tools/schedule.js';
 import { registerResources } from './resources/index.js';
 
 export function createServer(): { server: McpServer; dirs: ResolvedDirs } {
@@ -16,7 +17,7 @@ export function createServer(): { server: McpServer; dirs: ResolvedDirs } {
 
   const server = new McpServer({
     name: 'super-productivity',
-    version: '1.1.1',
+    version: '1.5.1',
   });
 
   registerTaskTools(server, dirs);
@@ -25,6 +26,7 @@ export function createServer(): { server: McpServer; dirs: ResolvedDirs } {
   registerNotificationTools(server, dirs);
   registerDiagnosticTools(server, dirs);
   registerTimeTools(server);
+  registerScheduleTools(server, dirs);
   registerResources(server, dirs);
 
   return { server, dirs };

@@ -3,7 +3,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ResolvedDirs } from '../ipc/directories.js';
 import { sendCommand } from '../ipc/command-sender.js';
 import type { TaskFilters } from '../ipc/types.js';
+import { deriveSchedule, findOverlaps, localDateStr, plannedTimeOf, type ScheduleBlock } from './schedule.js';
+import { enrichTask, loadRefs, type Refs } from '../enrich.js';
 import { errorResult, okResult } from './result.js';
+
+// Re-export for consumers that previously imported these from tasks.js.
+export { localDateStr, plannedTimeOf } from './schedule.js';
 
 interface TaskRecord {
   id: string;
@@ -25,20 +30,6 @@ interface TaskRecord {
 }
 
 
-
-/** Compute local YYYY-MM-DD date string (not UTC — spec requires local timezone boundary). */
-export function localDateStr(d: Date = new Date()): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-/**
- * Effective "planned at" timestamp of a task.
- * SP >= 14.0 stores it in `dueWithTime`; `plannedAt` is the obsolete field (always null in
- * current SP) kept only as a legacy fallback for old data. ALWAYS read this, never `plannedAt`.
- */
-export function plannedTimeOf(t: TaskRecord): number | null {
-  return t.dueWithTime ?? t.plannedAt ?? null;
-}
 
 /**
  * Shape a task for API responses: strip the obsolete `plannedAt` key (its stale null value is a
@@ -94,6 +85,114 @@ export function applyTriageFilters(
     });
   }
   return result;
+}
+
+/** Tasks whose planned time (start) falls on the given local date. Exported for testability. */
+export function filterScheduledOn(tasks: TaskRecord[], date: string): TaskRecord[] {
+  const startOfDay = new Date(`${date}T00:00:00`).getTime();
+  const startOfNextDay = startOfDay + 86_400_000;
+  return tasks.filter(t => {
+    const p = plannedTimeOf(t);
+    return p != null && p >= startOfDay && p < startOfNextDay;
+  });
+}
+
+/** Tasks completed (doneOn) on the given local date. Exported for testability. */
+export function filterCompletedOn(tasks: TaskRecord[], date: string): TaskRecord[] {
+  return tasks.filter(t => t.isDone && t.doneOn != null && localDateStr(new Date(t.doneOn)) === date);
+}
+
+/** Tasks that are members of at least one overlap cluster (needs planned time + estimate). */
+export function filterOverlapping(tasks: TaskRecord[]): TaskRecord[] {
+  const now = Date.now();
+  const clusters = findOverlaps(
+    tasks
+      .filter(t => !t.isDone)
+      .map(t => {
+        const s = deriveSchedule(t, now);
+        return { taskId: t.id, startMs: s.startMs, endMs: s.endMs };
+      }),
+  );
+  const ids = new Set(clusters.flatMap(c => c.taskIds));
+  return tasks.filter(t => ids.has(t.id));
+}
+
+export type SortBy = 'planned_time' | 'title' | 'due_day' | 'time_estimate';
+export type SortDir = 'asc' | 'desc';
+
+/** Stable sort of tasks by a schedule-aware key. Exported for testability. */
+export function sortTasks(tasks: TaskRecord[], by: SortBy, dir: SortDir): TaskRecord[] {
+  const mult = dir === 'desc' ? -1 : 1;
+  const cmp = (a: TaskRecord, b: TaskRecord): number => {
+    switch (by) {
+      case 'planned_time': {
+        const pa = plannedTimeOf(a) ?? Number.MAX_SAFE_INTEGER;
+        const pb = plannedTimeOf(b) ?? Number.MAX_SAFE_INTEGER;
+        return (pa - pb) * mult;
+      }
+      case 'due_day': {
+        const da = a.dueDay ?? '9999-12-31';
+        const db = b.dueDay ?? '9999-12-31';
+        if (da === db) return 0;
+        return (da < db ? -1 : 1) * mult;
+      }
+      case 'time_estimate':
+        return ((a.timeEstimate ?? 0) - (b.timeEstimate ?? 0)) * mult;
+      case 'title':
+      default:
+        return a.title.localeCompare(b.title) * mult;
+    }
+  };
+  return [...tasks].sort(cmp);
+}
+
+const DERIVED_SCHEDULE_FIELDS = ['startMs', 'endMs', 'startTime', 'endTime', 'durationMs', 'status'];
+
+/** Project a subset of fields, computing derived schedule fields on demand. Exported for testability. */
+export function projectFields(t: TaskRecord, fields: string[], now: number, refs?: Refs): Record<string, unknown> {
+  const needRefs = refs !== undefined && (fields.includes('projectTitle') || fields.includes('tags'));
+  const enriched = needRefs ? enrichTask(t, refs) : null;
+  const obj: Record<string, unknown> = {};
+  for (const f of fields) {
+    if (f === 'plannedAt' || f === 'plannedTime') {
+      // plannedAt is obsolete/stale; remap both names to the effective value
+      obj[f] = plannedTimeOf(t);
+    } else if (DERIVED_SCHEDULE_FIELDS.includes(f)) {
+      obj[f] = (deriveSchedule(t, now) as unknown as Record<string, unknown>)[f];
+    } else if ((f === 'projectTitle' || f === 'tags') && enriched) {
+      obj[f] = (enriched as unknown as Record<string, unknown>)[f];
+    } else if (f in t) {
+      obj[f] = (t as Record<string, unknown>)[f];
+    }
+  }
+  return obj;
+}
+
+export interface TaskDetail {
+  task: Record<string, unknown> & { schedule: ScheduleBlock };
+  parent: { id: string; title: string } | null;
+  subtasks: Array<{ id: string; title: string; isDone: boolean }>;
+  timeSpentLast14Days: Record<string, number>;
+}
+
+/** Compose a fully-resolved single-task view. Exported for testability. */
+export function composeTaskDetail(task: TaskRecord, allTasks: TaskRecord[], refs: Refs, now: number): TaskDetail {
+  const shaped = shapeForResponse(enrichTask(task, refs));
+  const parent = task.parentId
+    ? (() => {
+        const p = allTasks.find(t => t.id === task.parentId);
+        return p ? { id: p.id, title: p.title } : null;
+      })()
+    : null;
+  const subtasks = allTasks
+    .filter(t => t.parentId === task.id)
+    .map(t => ({ id: t.id, title: t.title, isDone: t.isDone }));
+  const cutoff = localDateStr(new Date(now - 14 * 86_400_000));
+  const timeSpentLast14Days: Record<string, number> = {};
+  for (const [date, ms] of Object.entries(task.timeSpentOnDay ?? {})) {
+    if (date >= cutoff) timeSpentLast14Days[date] = ms;
+  }
+  return { task: { ...shaped, schedule: deriveSchedule(task, now) }, parent, subtasks, timeSpentLast14Days };
 }
 
 export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
@@ -161,10 +260,16 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         unscheduled: z.boolean().optional().default(false).describe('Return only tasks with no due date and no scheduled time'),
         planned_for_today: z.boolean().optional().default(false).describe('Return only tasks planned for today (via dueWithTime timestamp)'),
         recurring_only: z.boolean().optional().default(false).describe('Return only recurring tasks (those with a repeatCfgId)'),
-        fields: z.array(z.string()).optional().describe('Return only these fields per task (e.g. ["id", "title", "dueDay"]). Omit for full objects. "plannedTime" returns the effective planned timestamp (SP field dueWithTime); "plannedAt" is a deprecated alias of it.'),
+        scheduled_on: z.string().optional().describe('Return only tasks whose planned time (start) falls on this date (YYYY-MM-DD)'),
+        completed_on: z.string().optional().describe('Return only tasks completed (doneOn) on this date (YYYY-MM-DD)'),
+        overlapping: z.boolean().optional().default(false).describe('Return only tasks involved in a time conflict (their scheduled window overlaps another task; requires planned time + positive estimate)'),
+        sort_by: z.enum(['planned_time', 'title', 'due_day', 'time_estimate']).optional().describe('Sort result by this field'),
+        sort_dir: z.enum(['asc', 'desc']).optional().default('asc').describe('Sort direction (default asc)'),
+        include_schedule: z.boolean().optional().default(false).describe('Append a derived schedule block { startMs, endMs, startTime, endTime, durationMs, status } to each full task (start = plannedTime, size = timeEstimate). Ignored when fields is provided.'),
+        fields: z.array(z.string()).optional().describe('Return only these fields per task (e.g. ["id", "title", "dueDay"]). Omit for full objects. "plannedTime" returns the effective planned timestamp (SP field dueWithTime); "plannedAt" is a deprecated alias of it. Derived schedule fields are also supported: "startMs", "endMs", "startTime", "endTime", "durationMs", "status".'),
       },
     },
-    async ({ project_id, tag_id, include_done, include_archived, search_query, parents_only, overdue, unscheduled, planned_for_today, recurring_only, fields }) => {
+    async ({ project_id, tag_id, include_done, include_archived, search_query, parents_only, overdue, unscheduled, planned_for_today, recurring_only, scheduled_on, completed_on, overlapping, sort_by, sort_dir, include_schedule, fields }) => {
       const filters: TaskFilters = {
         projectId: project_id,
         tagId: tag_id,
@@ -177,7 +282,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
 
       // Server-side filtering
       let tasks = (res.result as TaskRecord[]) ?? [];
-      if (!include_done) tasks = tasks.filter(t => !t.isDone);
+      if (!include_done && !completed_on) tasks = tasks.filter(t => !t.isDone);
       if (project_id) tasks = tasks.filter(t => t.projectId === project_id);
       if (tag_id) tasks = tasks.filter(t => t.tagIds?.includes(tag_id));
       if (search_query) {
@@ -189,25 +294,48 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
       // Triage filters (FR-004, FR-005, FR-006)
       tasks = applyTriageFilters(tasks, { parentsOnly: parents_only, overdue, unscheduled, plannedForToday: planned_for_today });
 
-      // Field selection (005-FR-001)
+      // Schedule-aware filters (server-side, after triage)
+      if (scheduled_on) tasks = filterScheduledOn(tasks, scheduled_on);
+      if (completed_on) tasks = filterCompletedOn(tasks, completed_on);
+      if (overlapping) tasks = filterOverlapping(tasks);
+      if (sort_by) tasks = sortTasks(tasks, sort_by, sort_dir ?? 'asc');
+
+      const now = Date.now();
+
+      // Field selection (005-FR-001) — supports derived schedule fields and resolved names
       if (fields && fields.length > 0) {
-        const shaped = tasks.map(t => {
-          const obj: Record<string, unknown> = {};
-          for (const f of fields) {
-            if (f === 'plannedAt' || f === 'plannedTime') {
-              // plannedAt is obsolete/stale; remap both names to the effective value
-              obj[f] = plannedTimeOf(t);
-            } else if (f in t) {
-              obj[f] = (t as Record<string, unknown>)[f];
-            }
-          }
-          return obj;
-        });
-        return okResult(shaped);
+        const refs = fields.some(f => f === 'projectTitle' || f === 'tags') ? await loadRefs(dirs) : undefined;
+        return okResult(tasks.map(t => projectFields(t, fields, now, refs)));
       }
 
-      // Full objects: strip obsolete plannedAt, expose canonical plannedTime alias
-      return okResult(tasks.map(shapeForResponse));
+      // Full objects: strip obsolete plannedAt, expose canonical plannedTime alias,
+      // resolve project/tag names, optionally append the derived schedule block
+      const refs = await loadRefs(dirs);
+      if (include_schedule) {
+        return okResult(tasks.map(t => ({ ...shapeForResponse(enrichTask(t, refs)), schedule: deriveSchedule(t, now) })));
+      }
+      return okResult(tasks.map(t => shapeForResponse(enrichTask(t, refs))));
+    },
+  );
+
+  // get_task — fully-resolved single-task deep-dive
+  server.registerTool(
+    'get_task',
+    {
+      description: 'Get a single task fully resolved: enriched with projectTitle + tags, derived schedule block, parent title, subtask list, and time spent over the last 14 days.',
+      inputSchema: {
+        task_id: z.string().describe('Task ID to fetch'),
+      },
+    },
+    async ({ task_id }) => {
+      if (!task_id?.trim()) return errorResult('task_id is required');
+      const res = await sendCommand(dirs, 'getTasks', { filters: { includeDone: true, includeArchived: true } });
+      if (!res.success) return errorResult(res.error ?? 'Failed to get task');
+      const all = (res.result as TaskRecord[]) ?? [];
+      const task = all.find(t => t.id === task_id);
+      if (!task) return errorResult(`Task not found: ${task_id}`);
+      const refs = await loadRefs(dirs);
+      return okResult(composeTaskDetail(task, all, refs, Date.now()));
     },
   );
 

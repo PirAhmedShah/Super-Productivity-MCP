@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ResolvedDirs } from '../ipc/directories.js';
 import { sendCommand } from '../ipc/command-sender.js';
+import { invalidateRefs } from '../enrich.js';
 import { errorResult, okResult } from './result.js';
 
 
@@ -20,6 +21,7 @@ export function registerProjectTools(server: McpServer, dirs: ResolvedDirs): voi
     if (color) data.theme = { primary: color };
     const res = await sendCommand(dirs, 'addProject', { data });
     if (!res.success) return errorResult(res.error ?? 'Failed to create project');
+    invalidateRefs(dirs);
     return okResult({ projectId: res.result });
   });
 
@@ -46,6 +48,7 @@ export function registerProjectTools(server: McpServer, dirs: ResolvedDirs): voi
     if (color !== undefined) data.theme = { primary: color };
     const res = await sendCommand(dirs, 'updateProject', { projectId: project_id, data });
     if (!res.success) return errorResult(res.error ?? 'Failed to update project');
+    invalidateRefs(dirs);
     return okResult(res.result);
   });
 }

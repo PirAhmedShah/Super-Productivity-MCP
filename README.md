@@ -134,7 +134,9 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 |------|-------------|
 | `create_task` | Create a task (supports SP short syntax) |
 | `create_task_with_subtasks` | Create a parent task + subtasks in one operation |
-| `get_tasks` | List tasks — filter by project, tag, done, archived, search (title+notes), `parents_only`, `overdue`, `unscheduled`, `planned_for_today`, `recurring_only`, `fields`. Full objects expose `plannedTime` (the effective planned timestamp, SP `dueWithTime`); `plannedAt` is a deprecated alias |
+| `get_tasks` | List tasks — filter by project, tag, done, archived, search (title+notes), `parents_only`, `overdue`, `unscheduled`, `planned_for_today`, `recurring_only`, `scheduled_on`, `completed_on`, `overlapping`, `sort_by`/`sort_dir`, `fields`, `include_schedule`. Full objects expose `plannedTime` (the effective planned timestamp, SP `dueWithTime`); `plannedAt` is a deprecated alias. Derived schedule fields (`startTime`, `endTime`, `startMs`, `endMs`, `durationMs`, `status`) are computable via `fields` or `include_schedule` |
+| `get_schedule` | Time-blocked view of a date range: tasks sized by `timeEstimate` (duration) and placed by `plannedTime` (start). Returns `scheduled` (with computed start/end/status), `overlaps` (conflict clusters), `unscheduledInRange`, `completedInRange`, and a `summary`. All items include resolved `projectTitle` + `tags` |
+| `get_task` | Fully-resolved single-task deep-dive: enriched names, derived schedule block, parent title, subtask list, and time spent over the last 14 days |
 | `update_task` | Update title, notes, done state, due date, `due_with_time`, time, tags (`planned_at` is a deprecated alias of `due_with_time`) |
 | `complete_task` | Mark a task as complete |
 | `delete_task` | Permanently delete a task (parent deletes subtasks too) |
@@ -160,6 +162,25 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 | `get_time` | Current machine date/time (local tz) — `epochMs`, `iso`, `localDate`, `localTime`, `dayOfWeek`, `timezone` |
 | `check_connection` | Verify SP is running and the plugin is responding (also returns `serverNow`) |
 | `debug_directories` | Show resolved data directory paths |
+
+## Resources
+
+| Resource | Description |
+|----------|-------------|
+| `sp://context` | **One-fetch session bootstrap**: server time, projects, tags, today's schedule (with overlaps + completed), overdue tasks, and the currently tracked task — all names resolved |
+| `sp://projects` | All projects with IDs and colors |
+| `sp://tags` | All tags with IDs, colors, and icons |
+| `sp://tasks/today` | Today's planned tasks (names resolved) |
+| `sp://tasks/overdue` | Overdue tasks (names resolved) |
+
+## Resolved names (enrichment)
+
+SP stores tasks with opaque `projectId` / `tagIds` UUIDs. To save the agent from joining `get_projects` + `get_tags` by hand, every task payload (from `get_tasks`, `get_schedule`, `get_task`, and the task resources) is enriched with:
+
+- `projectTitle` — the resolved project name (or `null`)
+- `tags` — `[{ id, title, color }]` for each of the task's tags
+
+Project/tag lookups are cached server-side (30s TTL) and invalidated automatically on `create/update_tag` and `create/update_project`, so writes are reflected immediately. Unknown references degrade gracefully (resolve to `null` / are omitted). `get_tasks { fields: [...] }` also accepts `projectTitle` and `tags` as selectable fields.
 
 ## SP Short Syntax
 
@@ -193,6 +214,9 @@ Include these in task titles and they are parsed automatically:
 ## Scheduling semantics (planned time)
 
 - The "planned at" time of a task lives in SP's `dueWithTime` field. The legacy `plannedAt` field is obsolete and always `null` in current SP — never read or write it.
+- A task's **size** is its `timeEstimate` (duration) and its **start** is its planned time. `get_schedule` combines the two into a timeline: `startMs = plannedTime`, `endMs = startMs + timeEstimate`.
+- `get_schedule` reports **overlap conflict clusters** — transitively-connected groups of tasks whose scheduled windows intersect. Only open tasks with both a planned time and a positive estimate participate; intervals that merely touch at a boundary are not overlaps. `get_tasks { overlapping: true }` returns just the tasks involved in a conflict.
+- Derived per-task `status`: `done` → `unsized` (no planned time) → `past` (now ≥ end) → `in-progress` (now ≥ start) → `upcoming`.
 - Get the current wall clock with `get_time` (or `check_connection.serverNow`) — `epochMs` is ready for scheduling; do not shell out to `date`.
 - `update_task { due_with_time: <unix ms> }` sets the exact planned time (`get_time`'s `epochMs` = "from now until next task"); `null` unplans. `planned_at` is a deprecated alias.
 - `plan_tasks_for_today` pins tasks to start-of-day (00:00). Use `plan_from_now: true` when an exact start time matters.

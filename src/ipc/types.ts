@@ -31,6 +31,10 @@ export interface TaskFilters {
   unscheduled?: boolean;
   // Today filter (003-FR-006) — applied server-side
   plannedForToday?: boolean;
+  // Schedule-aware filters — applied server-side after getTasks()
+  scheduledOn?: string;
+  completedOn?: string;
+  overlapping?: boolean;
 }
 
 export interface Response {

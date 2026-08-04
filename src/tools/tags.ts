@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ResolvedDirs } from '../ipc/directories.js';
 import { sendCommand } from '../ipc/command-sender.js';
+import { invalidateRefs } from '../enrich.js';
 import { errorResult, okResult } from './result.js';
 
 
@@ -18,6 +19,7 @@ export function registerTagTools(server: McpServer, dirs: ResolvedDirs): void {
     if (color) data.color = color;
     const res = await sendCommand(dirs, 'addTag', { data });
     if (!res.success) return errorResult(res.error ?? 'Failed to create tag');
+    invalidateRefs(dirs);
     return okResult({ tagId: res.result });
   });
 
@@ -46,6 +48,7 @@ export function registerTagTools(server: McpServer, dirs: ResolvedDirs): void {
     if (icon !== undefined) data.icon = icon;
     const res = await sendCommand(dirs, 'updateTag', { tagId: tag_id, data });
     if (!res.success) return errorResult(res.error ?? 'Failed to update tag');
+    invalidateRefs(dirs);
     return okResult(res.result);
   });
 }

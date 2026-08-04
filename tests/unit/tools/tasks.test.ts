@@ -6,7 +6,7 @@ vi.mock('../../../src/ipc/command-sender.js', () => ({
 }));
 
 import { sendCommand } from '../../../src/ipc/command-sender.js';
-import { applyTriageFilters, fetchTasksByIds, localDateStr, plannedTimeOf, shapeForResponse } from '../../../src/tools/tasks.js';
+import { applyTriageFilters, composeTaskDetail, fetchTasksByIds, filterCompletedOn, filterOverlapping, filterScheduledOn, localDateStr, plannedTimeOf, projectFields, shapeForResponse, sortTasks } from '../../../src/tools/tasks.js';
 import type { ResolvedDirs } from '../../../src/ipc/directories.js';
 import type { Response } from '../../../src/ipc/types.js';
 
@@ -716,6 +716,130 @@ describe('task tool logic', () => {
       const res = await sendCommand(dirs, 'getTaskRepeatCfgs');
       expect(res.success).toBe(false);
       expect(res.error).toBe('Failed to get repeat configs');
+    });
+  });
+
+  // Schedule-aware get_tasks filters and derived fields
+  describe('schedule-aware filters / derived fields', () => {
+    const HOUR = 3_600_000;
+    const startOfToday = new Date().setHours(0, 0, 0, 0);
+    const NINE_AM = startOfToday + 9 * HOUR;
+    const TEN_AM = startOfToday + 10 * HOUR;
+
+    const schedTasks = [
+      { id: '1', title: 'A 9-11', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: NINE_AM, timeEstimate: 2 * HOUR, timeSpent: 0, doneOn: null },
+      { id: '2', title: 'B 10-12', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: TEN_AM, timeEstimate: 2 * HOUR, timeSpent: 0, doneOn: null },
+      { id: '3', title: 'C isolated 15-16', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: startOfToday + 15 * HOUR, timeEstimate: HOUR, timeSpent: 0, doneOn: null },
+      { id: '4', title: 'D no size', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: NINE_AM + 30 * 60 * 1000, timeEstimate: 0, timeSpent: 0, doneOn: null },
+      { id: '5', title: 'E done today', isDone: true, projectId: 'p1', tagIds: [], parentId: null, dueDay: null, dueWithTime: null, timeEstimate: HOUR, timeSpent: 0, doneOn: Date.now() },
+      { id: '6', title: 'F unscheduled', isDone: false, projectId: 'p1', tagIds: [], parentId: null, dueDay: localDateStr(), dueWithTime: null, timeEstimate: HOUR, timeSpent: 0, doneOn: null },
+    ];
+
+    it('filterScheduledOn returns only tasks planned on that date', () => {
+      const today = localDateStr();
+      const result = filterScheduledOn(schedTasks, today);
+      expect(result.map(t => t.id)).toEqual(['1', '2', '3', '4']);
+    });
+
+    it('filterScheduledOn excludes tasks planned on other dates', () => {
+      const yesterday = localDateStr(new Date(Date.now() - 86_400_000));
+      expect(filterScheduledOn(schedTasks, yesterday)).toEqual([]);
+    });
+
+    it('filterCompletedOn matches doneOn date', () => {
+      const today = localDateStr();
+      const result = filterCompletedOn(schedTasks, today);
+      expect(result.map(t => t.id)).toEqual(['5']);
+    });
+
+    it('filterOverlapping returns only members of a conflict cluster', () => {
+      // 1 (9-11) and 2 (10-12) overlap; 3 isolated; 4 unsized (no end); done and unscheduled excluded
+      const result = filterOverlapping(schedTasks);
+      expect(result.map(t => t.id).sort()).toEqual(['1', '2']);
+    });
+
+    it('sortTasks by planned_time places null last ascending, reverses descending', () => {
+      const asc = sortTasks(schedTasks, 'planned_time', 'asc').map(t => t.id);
+      expect(asc).toEqual(['1', '4', '2', '3', '5', '6']);
+      const desc = sortTasks(schedTasks, 'planned_time', 'desc').map(t => t.id);
+      expect(desc).toEqual(['5', '6', '3', '2', '4', '1']);
+    });
+
+    it('sortTasks by title and time_estimate', () => {
+      expect(sortTasks(schedTasks, 'title', 'asc').map(t => t.id)).toEqual(['1', '2', '3', '4', '5', '6']);
+      expect(sortTasks(schedTasks, 'time_estimate', 'asc').map(t => t.id)[0]).toBe('4');
+    });
+
+    it('projectFields computes derived schedule fields on demand', () => {
+      const now = NINE_AM + 30 * 60 * 1000;
+      const fields = ['id', 'startTime', 'endTime', 'status'];
+      const [p1, p4] = [projectFields(schedTasks[0], fields, now), projectFields(schedTasks[3], fields, now)];
+      expect(p1).toEqual({ id: '1', startTime: '09:00', endTime: '11:00', status: 'in-progress' });
+      expect(p4).toEqual({ id: '4', startTime: '09:30', endTime: null, status: 'in-progress' });
+    });
+
+    it('projectFields remaps plannedAt/plannedTime aliases and ignores unknown fields', () => {
+      const fields = ['id', 'plannedTime', 'plannedAt', 'nonexistent'];
+      const p = projectFields(schedTasks[0], fields, Date.now());
+      expect(p.plannedTime).toBe(NINE_AM);
+      expect(p.plannedAt).toBe(NINE_AM);
+      expect('nonexistent' in p).toBe(false);
+    });
+  });
+
+  // Enrichment: resolved names in projectFields + single-task detail composition
+  describe('enrichment (projectTitle / tags) and get_task detail', () => {
+    const NOW = Date.now();
+    const NINE_AM = NOW - 60_000; // started a minute ago → deterministically in-progress
+    const refs = {
+      projectById: new Map([['p1', { id: 'p1', title: 'Career Branding', color: null }]]),
+      tagById: new Map([
+        ['t1', { id: 't1', title: 'urgent', color: '#FF0000' }],
+        ['t2', { id: 't2', title: 'deep-work', color: null }],
+      ]),
+    };
+    const detailTasks = [
+      { id: 'parent', title: 'Launch blog', isDone: false, projectId: 'p1', tagIds: ['t1', 't2'], parentId: null, dueDay: null, dueWithTime: NINE_AM, timeEstimate: 3_600_000, timeSpent: 0, timeSpentOnDay: { [localDateStr()]: 600000, '2026-01-01': 900000 }, doneOn: null },
+      { id: 'child1', title: 'Write post', isDone: false, projectId: 'p1', tagIds: [], parentId: 'parent', dueDay: null, dueWithTime: null, timeEstimate: 0, timeSpent: 0, timeSpentOnDay: {}, doneOn: null },
+      { id: 'child2', title: 'Publish', isDone: true, projectId: 'p1', tagIds: [], parentId: 'parent', dueDay: null, dueWithTime: null, timeEstimate: 0, timeSpent: 0, timeSpentOnDay: {}, doneOn: Date.now() },
+      { id: 'other', title: 'Unrelated', isDone: false, projectId: 'p2', tagIds: [], parentId: null, dueDay: null, dueWithTime: null, timeEstimate: 0, timeSpent: 0, timeSpentOnDay: {}, doneOn: null },
+    ];
+
+    it('projectFields resolves projectTitle and tags when refs are provided', () => {
+      const fields = ['id', 'projectTitle', 'tags'];
+      const p = projectFields(detailTasks[0], fields, NOW, refs as any);
+      expect(p).toEqual({ id: 'parent', projectTitle: 'Career Branding', tags: [{ id: 't1', title: 'urgent', color: '#FF0000' }, { id: 't2', title: 'deep-work', color: null }] });
+    });
+
+    it('projectFields omits enriched names when refs are absent', () => {
+      const p = projectFields(detailTasks[0], ['id', 'projectTitle', 'tags'], NOW);
+      expect(p).toEqual({ id: 'parent' });
+    });
+
+    it('composeTaskDetail resolves parent, subtasks, and last-14-day time', () => {
+      const detail = composeTaskDetail(detailTasks[0], detailTasks, refs as any, NOW);
+      expect(detail.task.projectTitle).toBe('Career Branding');
+      expect(detail.task.tags).toEqual([{ id: 't1', title: 'urgent', color: '#FF0000' }, { id: 't2', title: 'deep-work', color: null }]);
+      expect(detail.task.schedule.status).toBe('in-progress');
+      expect(detail.parent).toBeNull();
+      expect(detail.subtasks).toEqual([
+        { id: 'child1', title: 'Write post', isDone: false },
+        { id: 'child2', title: 'Publish', isDone: true },
+      ]);
+      expect(detail.timeSpentLast14Days[localDateStr()]).toBe(600000);
+      expect('2026-01-01' in detail.timeSpentLast14Days).toBe(false);
+    });
+
+    it('composeTaskDetail resolves parent title for a subtask', () => {
+      const detail = composeTaskDetail(detailTasks[1], detailTasks, refs as any, NOW);
+      expect(detail.parent).toEqual({ id: 'parent', title: 'Launch blog' });
+      expect(detail.subtasks).toEqual([]);
+    });
+
+    it('composeTaskDetail strips stale plannedAt and exposes plannedTime', () => {
+      const detail = composeTaskDetail(detailTasks[0], detailTasks, refs as any, NOW);
+      expect('plannedAt' in detail.task).toBe(false);
+      expect(detail.task.plannedTime).toBe(NINE_AM);
     });
   });
 });
