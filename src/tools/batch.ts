@@ -49,9 +49,10 @@ const batchOperationSchema = z.discriminatedUnion('type', [
   batchReorderSchema,
 ]);
 
-type BatchOperation = z.infer<typeof batchOperationSchema>;
+export type BatchOperation = z.infer<typeof batchOperationSchema>;
 
-function toSpOperation(op: BatchOperation): Record<string, unknown> {
+/** Map snake_case agent ops onto SP's BatchOperation shape. Exported for testability. */
+export function toSpOperation(op: BatchOperation): Record<string, unknown> {
   switch (op.type) {
     case 'create': {
       const d: Record<string, unknown> = { title: op.data.title };

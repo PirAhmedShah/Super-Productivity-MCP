@@ -10,6 +10,10 @@ vi.mock('../../src/ipc/command-sender.js', () => ({
 import { sendCommand } from '../../src/ipc/command-sender.js';
 import { registerTaskTools } from '../../src/tools/tasks.js';
 import { registerScheduleTools, localDateStr } from '../../src/tools/schedule.js';
+import { registerBatchTools } from '../../src/tools/batch.js';
+import { registerContextTools } from '../../src/tools/context.js';
+import { registerStateTools } from '../../src/tools/state.js';
+import { registerCounterTools } from '../../src/tools/counters.js';
 import { invalidateRefs } from '../../src/enrich.js';
 import type { ResolvedDirs } from '../../src/ipc/directories.js';
 import type { Response } from '../../src/ipc/types.js';
@@ -65,6 +69,10 @@ async function withServer(tasks: Record<string, unknown>[]): Promise<ToolClient>
   const server = new McpServer({ name: 'test', version: '1.0.0' });
   registerTaskTools(server, dirs);
   registerScheduleTools(server, dirs);
+  registerBatchTools(server, dirs);
+  registerContextTools(server, dirs);
+  registerStateTools(server, dirs);
+  registerCounterTools(server, dirs);
 
   const [client, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -159,6 +167,146 @@ describe('integration: tools over the MCP protocol', () => {
       const msg = await c.call('get_tasks', {});
       expect(msg.result.isError).toBe(true);
       expect(JSON.parse(msg.result.content[0].text).error).toContain('SP not responding');
+    } finally {
+      await c.close();
+    }
+  });
+
+  it('batch_update_project returns createdTaskIds mapping over the wire', async () => {
+    mockSend.mockResolvedValueOnce(mockResponse({
+      success: true,
+      createdTaskIds: { tmp1: 'real-1', tmp2: 'real-2' },
+      errors: [],
+    }));
+    const c = await withServer([]);
+    try {
+      const msg = await c.call('batch_update_project', {
+        project_id: 'p1',
+        operations: [
+          { type: 'create', temp_id: 'tmp1', data: { title: 'A', is_done: true } },
+          { type: 'create', temp_id: 'tmp2', data: { title: 'B', time_estimate: 3600000 } },
+        ],
+      });
+      expect(msg.result.isError).toBeFalsy();
+      const payload = JSON.parse(msg.result.content[0].text);
+      expect(payload.success).toBe(true);
+      expect(payload.createdTaskIds).toEqual({ tmp1: 'real-1', tmp2: 'real-2' });
+      expect(payload.errors).toEqual([]);
+    } finally {
+      await c.close();
+    }
+  });
+
+  it('batch_update_project sends snake_case ops mapped to SP camelCase', async () => {
+    mockSend.mockResolvedValueOnce(mockResponse({ success: true, createdTaskIds: {}, errors: [] }));
+    const c = await withServer([]);
+    try {
+      await c.call('batch_update_project', {
+        project_id: 'p1',
+        operations: [
+          { type: 'update', task_id: 'real-1', updates: { title: 'B', is_done: true } },
+          { type: 'delete', task_id: 'real-2' },
+          { type: 'reorder', task_ids: ['tmp1', 'real-1'] },
+        ],
+      });
+      const [, action, fields] = mockSend.mock.calls.at(-1)! as unknown as [unknown, string, Record<string, unknown>];
+      expect(action).toBe('batchUpdateForProject');
+      expect((fields.data as { projectId: string }).projectId).toBe('p1');
+      expect(fields.data).toMatchObject({
+        operations: [
+          { type: 'update', taskId: 'real-1', updates: { title: 'B', isDone: true } },
+          { type: 'delete', taskId: 'real-2' },
+          { type: 'reorder', taskIds: ['tmp1', 'real-1'] },
+        ],
+      });
+    } finally {
+      await c.close();
+    }
+  });
+
+  it('batch_update_project surfaces a plugin error result', async () => {
+    mockSend.mockResolvedValueOnce(mockResponse({
+      success: false,
+      createdTaskIds: {},
+      errors: ['taskId real-1 not found'],
+    }));
+    const c = await withServer([]);
+    try {
+      const msg = await c.call('batch_update_project', {
+        project_id: 'p1',
+        operations: [{ type: 'update', task_id: 'real-1', updates: { title: 'X' } }],
+      });
+      expect(msg.result.isError).toBeFalsy();
+      const payload = JSON.parse(msg.result.content[0].text);
+      expect(payload.success).toBe(false);
+      expect(payload.errors).toContain('taskId real-1 not found');
+    } finally {
+      await c.close();
+    }
+  });
+
+  it('get_active_work_context returns the current work context', async () => {
+    mockSend.mockResolvedValueOnce(mockResponse({
+      id: 'wc-1',
+      type: 'PROJECT',
+      title: 'Career Branding',
+      taskIds: ['t1'],
+    }));
+    const c = await withServer([]);
+    try {
+      const msg = await c.call('get_active_work_context', {});
+      expect(msg.result.isError).toBeFalsy();
+      const payload = JSON.parse(msg.result.content[0].text);
+      expect(payload.context).toEqual({ id: 'wc-1', type: 'PROJECT', title: 'Career Branding', taskIds: ['t1'] });
+    } finally {
+      await c.close();
+    }
+  });
+
+  it('get_app_state passes the full snapshot through', async () => {
+    mockSend.mockResolvedValueOnce(mockResponse({
+      tasks: [task({ id: 't1' })],
+      projects: PROJECTS,
+      tags: TAGS,
+      notes: [{ id: 'n1', content: 'hello' }],
+    }));
+    const c = await withServer([]);
+    try {
+      const msg = await c.call('get_app_state', {});
+      expect(msg.result.isError).toBeFalsy();
+      const payload = JSON.parse(msg.result.content[0].text);
+      expect(payload.state.tasks[0].id).toBe('t1');
+      expect(payload.state.projects).toHaveLength(1);
+      expect(payload.state.tags).toHaveLength(1);
+      expect(payload.state.notes[0].content).toBe('hello');
+      expect(payload.savedTo).toBeNull();
+    } finally {
+      await c.close();
+    }
+  });
+
+  it('counter tools round-trip over the wire', async () => {
+    mockSend.mockResolvedValueOnce(mockResponse({ c1: 2, c2: 0 }));
+    const c = await withServer([]);
+    try {
+      const msg = await c.call('get_all_counters', {});
+      expect(msg.result.isError).toBeFalsy();
+      expect(JSON.parse(msg.result.content[0].text).counters).toEqual({ c1: 2, c2: 0 });
+    } finally {
+      await c.close();
+    }
+  });
+
+  it('increment_counter passes the counter id and incrementBy to the plugin', async () => {
+    mockSend.mockResolvedValueOnce(mockResponse(3));
+    const c = await withServer([]);
+    try {
+      const msg = await c.call('increment_counter', { counter_id: 'c1', increment_by: 2 });
+      expect(msg.result.isError).toBeFalsy();
+      expect(JSON.parse(msg.result.content[0].text).value).toBe(3);
+      const [, action, fields] = mockSend.mock.calls.at(-1)! as unknown as [unknown, string, Record<string, unknown>];
+      expect(action).toBe('incrementCounter');
+      expect(fields).toEqual({ counterId: 'c1', incrementBy: 2 });
     } finally {
       await c.close();
     }
