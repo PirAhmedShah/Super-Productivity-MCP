@@ -17,6 +17,11 @@ export interface Command {
   updates?: Array<{ taskId: string; data: Record<string, unknown> }>;
   // Fields for addTimeToday (agent-driven time tracking)
   ms?: number;
+  // Fields for counter tools
+  counterId?: string;
+  value?: number;
+  incrementBy?: number;
+  decrementBy?: number;
 }
 
 export interface TaskFilters {
