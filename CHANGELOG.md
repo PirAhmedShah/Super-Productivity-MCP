@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions align with the SP plugin manifest and the npm package.
 
+## [1.8.2] — 2026-08-05
+
+### Fixed
+- **`bulk_update_tasks` now supports the full `update_task` field set** (#10) — the schema omitted `due_with_time`, `is_done`, and `time_spent_on_day`, so batch rescheduling/completion/time-corrections degraded to N sequential `update_task` calls (a 9-task +1h shift cost 9 calls). Server schema + mapping now mirror `update_task` (incl. `doneOn` derivation and bucket-merge semantics).
+- **Plugin: `bulkUpdateTasks` now runs the same processing as `updateTask`** — previously a raw passthrough, so bulk silently skipped title short-syntax scrubbing, `time_spent_on_day` merging, and the `dueDay`→`dueWithTime` preservation. Both paths now share one exported `applyTaskUpdate` processor (12 new tests: 8 plugin + 7 handler + 2 integration + 1 batch mapping).
+- **`bulk_update_tasks` echoes effective tasks** — after the writes it re-fetches the affected ids (one extra round-trip) and returns `tasks` (id → effective task incl. `plannedTime`) alongside `results`, closing the verification gap that made the agent prefer per-task `update_task` for auditable echoes.
+- **`batch_update_project` update-op accepts `due_with_time`** — same gap as `bulk_update_tasks`, now mappable in atomic project batches (null = unplan).
+
 ## [1.8.1] — 2026-08-05
 
 ### Fixed

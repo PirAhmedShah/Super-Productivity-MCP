@@ -1,6 +1,6 @@
 // MCP Bridge Plugin for Super Productivity
 // Keep PLUGIN_VERSION in sync with manifest.json "version".
-const PLUGIN_VERSION = '1.8.1';
+const PLUGIN_VERSION = '1.8.2';
 const PROTOCOL_VERSION = 1;
 // This plugin is built for SP 18.16.0 only; older builds are refused with a clear error
 // instead of silently degrading (no marker-only timer fallback, no legacy plannedAt paths).
@@ -130,6 +130,42 @@ function stripResidualDateTokens(rawTitle) {
   return rawTitle.replace(RE, ' ').replace(/\s+/g, ' ').trim();
 }
 
+// Shared single-task update processing — used by BOTH the updateTask command and each item of
+// bulkUpdateTasks (raw passthrough previously skipped this logic for bulk, so bulk could not
+// express time_spent_on_day and mishandled dueDay/dueWithTime interplay). Takes `api` (the
+// PluginAPI-like surface) so it is unit-testable without the SP bridge. Throws on invalid input
+// so callers control their own error shape.
+async function applyTaskUpdate(api, taskId, data) {
+  const updateData = Object.assign({}, data || {});
+  // Title-only updates re-run SP's short-syntax parser (SP 18.16+), so scrub residual
+  // date-like @tokens the same way as on create.
+  if (updateData.title) updateData.title = stripResidualDateTokens(updateData.title);
+  // time_spent_on_day: merge a { 'YYYY-MM-DD': ms } map into the existing per-day bucket
+  // (corrections; dates not listed are untouched). timeSpent is recomputed as the bucket
+  // sum unless the caller explicitly set it, mirroring addTimeToday's accounting invariant
+  // (the worklog sums timeSpentOnDay, so writing timeSpent alone would drift the totals).
+  if ('time_spent_on_day' in updateData) {
+    const allTasksForBucket = await api.getTasks();
+    const taskForBucket = allTasksForBucket.find((t) => t.id === taskId);
+    if (!taskForBucket) throw new Error(`Task not found: ${taskId}`);
+    const merged = mergeTimeSpentOnDay(taskForBucket.timeSpentOnDay, updateData.time_spent_on_day, updateData.timeSpent);
+    if (!merged) throw new Error('Invalid time_spent_on_day: values must be non-negative numbers');
+    delete updateData.time_spent_on_day;
+    delete updateData.timeSpent;
+    Object.assign(updateData, merged);
+  }
+  // SP auto-sets the planned time (dueWithTime) when dueDay changes. Preserve existing
+  // value unless the caller explicitly included dueWithTime in the update.
+  if ('dueDay' in updateData && !('dueWithTime' in updateData)) {
+    const allTasksForUpdate = await api.getTasks();
+    const taskForUpdate = allTasksForUpdate.find((t) => t.id === taskId);
+    const currentPlannedTime = taskForUpdate ? (taskForUpdate.dueWithTime ?? null) : null;
+    return api.updateTask(taskId, Object.assign({}, updateData, { dueWithTime: currentPlannedTime }));
+  }
+  return api.updateTask(taskId, updateData);
+}
+
+
 // Merge a { 'YYYY-MM-DD': ms } patch into a task's per-day bucket. Returns null when the patch
 // is invalid (non-finite or negative ms). The total (timeSpent) is recomputed as the bucket sum
 // unless the caller explicitly overrides it. Keeps the addTimeToday invariant: the worklog sums
@@ -219,7 +255,7 @@ async function runBatchUpdateForProject(api, data) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseAtDateSyntax, stripResidualDateTokens, mergeTimeSpentOnDay, runBatchUpdateForProject, rewriteBatchOp, isAtLeast, MIN_SUP_VERSION };
+  module.exports = { parseAtDateSyntax, stripResidualDateTokens, mergeTimeSpentOnDay, applyTaskUpdate, runBatchUpdateForProject, rewriteBatchOp, isAtLeast, MIN_SUP_VERSION };
 }
 
 async function setupDirectories() {
@@ -431,37 +467,10 @@ async function executeCommand(command) {
         break;
       }
       case 'updateTask': {
-        const updateData = command.data || {};
-        // Title-only updates re-run SP's short-syntax parser (SP 18.16+), so scrub residual
-        // date-like @tokens the same way as on create.
-        if (updateData.title) updateData.title = stripResidualDateTokens(updateData.title);
-        // time_spent_on_day: merge a { 'YYYY-MM-DD': ms } map into the existing per-day bucket
-        // (corrections; dates not listed are untouched). timeSpent is recomputed as the bucket
-        // sum unless the caller explicitly set it, mirroring addTimeToday's accounting invariant
-        // (the worklog sums timeSpentOnDay, so writing timeSpent alone would drift the totals).
-        if ('time_spent_on_day' in updateData) {
-          const allTasksForBucket = await PluginAPI.getTasks();
-          const taskForBucket = allTasksForBucket.find(t => t.id === command.taskId);
-          if (!taskForBucket) {
-            return { success: false, error: `Task not found: ${command.taskId}`, timestamp: Date.now() };
-          }
-          const merged = mergeTimeSpentOnDay(taskForBucket.timeSpentOnDay, updateData.time_spent_on_day, updateData.timeSpent);
-          if (!merged) {
-            return { success: false, error: 'Invalid time_spent_on_day: values must be non-negative numbers', timestamp: Date.now() };
-          }
-          delete updateData.time_spent_on_day;
-          delete updateData.timeSpent;
-          Object.assign(updateData, merged);
-        }
-        // SP auto-sets the planned time (dueWithTime) when dueDay changes. Preserve existing
-        // value unless the caller explicitly included dueWithTime in the update.
-        if ('dueDay' in updateData && !('dueWithTime' in updateData)) {
-          const allTasksForUpdate = await PluginAPI.getTasks();
-          const taskForUpdate = allTasksForUpdate.find(t => t.id === command.taskId);
-          const currentPlannedTime = taskForUpdate ? (taskForUpdate.dueWithTime ?? null) : null;
-          result = await PluginAPI.updateTask(command.taskId, { ...updateData, dueWithTime: currentPlannedTime });
-        } else {
-          result = await PluginAPI.updateTask(command.taskId, updateData);
+        try {
+          result = await applyTaskUpdate(PluginAPI, command.taskId, command.data || {});
+        } catch (e) {
+          return { success: false, error: e.message || String(e), timestamp: Date.now() };
         }
         break;
       }
@@ -595,7 +604,7 @@ async function executeCommand(command) {
         const results = [];
         for (const item of (command.updates || [])) {
           try {
-            await PluginAPI.updateTask(item.taskId, item.data || {});
+            await applyTaskUpdate(PluginAPI, item.taskId, item.data || {});
             results.push({ id: item.taskId, success: true });
           } catch (e) {
             results.push({ id: item.taskId, success: false, error: e.message || String(e) });

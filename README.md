@@ -176,7 +176,7 @@ See [more use cases](docs/use-cases.md).
 |------|-------------|
 | `create_task` | Create a task (supports SP short syntax) |
 | `create_task_with_subtasks` | Create a parent task + subtasks in one operation |
-| `batch_update_project` | Atomic multi-operation batch on one project (create/update/delete/reorder) in a single call. Same-batch `temp_id` references resolve for parents and reorder (plugin ≥ 1.7.1); update/delete need real ids from `createdTaskIds` (see [Atomic batch operations](#atomic-batch-operations)) |
+| `batch_update_project` | Atomic multi-operation batch on one project (create/update/delete/reorder) in a single call. Same-batch `temp_id` references resolve for parents and reorder (plugin ≥ 1.7.1); update/delete need real ids from `createdTaskIds` (see [Atomic batch operations](#atomic-batch-operations)). Update ops also accept `due_with_time` for exact-time rescheduling |
 | `get_tasks` | List tasks. Filter by project, tag, done, archived, search (title+notes), `parents_only`, `overdue`, `unscheduled`, `planned_for_today`, `recurring_only`, `scheduled_on`, `completed_on`, `overlapping`, `sort_by`/`sort_dir`, `fields`, `include_schedule`. Full objects expose `plannedTime` (the effective planned timestamp, SP `dueWithTime`). Derived schedule fields (`startTime`, `endTime`, `startMs`, `endMs`, `durationMs`, `status`) are computable via `fields` or `include_schedule` |
 | `get_schedule` | Time-blocked view of a date range: tasks sized by `timeEstimate` (duration) and placed by `plannedTime` (start). Returns `scheduled` (with computed start/end/status), `overlaps` (conflict clusters), `unscheduledInRange`, `completedInRange`, and a `summary`. Subtasks are included by default (matching SP's Today view); `include_subtasks: false` opts out and the response then reports hidden tasks via `filteredSubtasks`. All items include resolved `projectTitle` + `tags` |
 | `get_task` | Fully-resolved single-task deep-dive: enriched names, derived schedule block, parent title, subtask list, and time spent over the last 14 days |
@@ -194,7 +194,7 @@ See [more use cases](docs/use-cases.md).
 | `get_current_context_tasks` | The tasks currently rendered in the active work context |
 | `plan_tasks_for_today` | Batch plan/unplan tasks for today (pins to 00:00; `plan_from_now` plans at the current time) |
 | `bulk_complete_tasks` | Mark multiple tasks complete in one operation |
-| `bulk_update_tasks` | Update multiple tasks in one operation |
+| `bulk_update_tasks` | Update multiple tasks in one operation. Full `update_task` field set per item: title, notes, due_day, `due_with_time` (null = unplan), is_done, tag_ids, time_estimate, time_spent, `time_spent_on_day` (bucket corrections). Returns per-task `results` plus an echo of effective tasks (`tasks`) for one-round-trip verification |
 | `add_tag_to_task` | Add a tag without replacing other tags |
 | `remove_tag_from_task` | Remove a single tag |
 | `move_task_to_project` | Move a top-level task to a different project |

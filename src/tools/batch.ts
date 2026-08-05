@@ -28,6 +28,7 @@ const batchUpdateSchema = z.object({
     is_done: z.boolean().optional(),
     parent_id: z.string().nullable().optional(),
     time_estimate: z.number().int().nonnegative().optional(),
+    due_with_time: z.number().nullable().optional().describe('Unix ms timestamp to plan the task at an exact time (maps to SP dueWithTime). Pass null to unplan.'),
     sub_task_ids: z.array(z.string()).optional(),
   }),
 });
@@ -69,6 +70,7 @@ export function toSpOperation(op: BatchOperation): Record<string, unknown> {
       if (op.updates.is_done !== undefined) u.isDone = op.updates.is_done;
       if (op.updates.parent_id !== undefined) u.parentId = op.updates.parent_id;
       if (op.updates.time_estimate !== undefined) u.timeEstimate = op.updates.time_estimate;
+      if (op.updates.due_with_time !== undefined) u.dueWithTime = op.updates.due_with_time;
       if (op.updates.sub_task_ids !== undefined) u.subTaskIds = op.updates.sub_task_ids;
       return { type: 'update', taskId: op.task_id, updates: u };
     }

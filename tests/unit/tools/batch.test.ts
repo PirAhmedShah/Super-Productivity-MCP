@@ -41,6 +41,27 @@ describe('toSpOperation mapping (batch_update_project)', () => {
     });
   });
 
+  it('maps due_with_time on an update op (exact-time rescheduling in batches)', () => {
+    expect(toSpOperation({
+      type: 'update',
+      task_id: 'real-1',
+      updates: { due_with_time: 1785925818183 },
+    })).toEqual({
+      type: 'update',
+      taskId: 'real-1',
+      updates: { dueWithTime: 1785925818183 },
+    });
+    expect(toSpOperation({
+      type: 'update',
+      task_id: 'real-1',
+      updates: { due_with_time: null },
+    })).toEqual({
+      type: 'update',
+      taskId: 'real-1',
+      updates: { dueWithTime: null },
+    });
+  });
+
   it('maps a delete op', () => {
     expect(toSpOperation({ type: 'delete', task_id: 'real-3' })).toEqual({
       type: 'delete',

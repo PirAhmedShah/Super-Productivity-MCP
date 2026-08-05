@@ -345,4 +345,71 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
       expect(data.summary.completedCount).toBe(1);
     });
   });
+
+  describe('bulk_update_tasks', () => {
+    function lastBulkPayload(): { taskId: string; data: Record<string, unknown> }[] {
+      const calls = mockSend.mock.calls.filter(c => c[1] === 'bulkUpdateTasks');
+      return (calls[calls.length - 1][2] as { updates: { taskId: string; data: Record<string, unknown> }[] }).updates;
+    }
+
+    it('maps due_with_time to dueWithTime (exact-time rescheduling)', async () => {
+      mockPlugin([]);
+      await callTool('bulk_update_tasks', {
+        updates: [{ task_id: 'a', due_with_time: TODAY_MS + 9 * HOUR }],
+      });
+      expect(lastBulkPayload()).toEqual([{ taskId: 'a', data: { dueWithTime: TODAY_MS + 9 * HOUR } }]);
+    });
+
+    it('maps due_with_time null to an unplan', async () => {
+      mockPlugin([]);
+      await callTool('bulk_update_tasks', { updates: [{ task_id: 'a', due_with_time: null }] });
+      expect(lastBulkPayload()).toEqual([{ taskId: 'a', data: { dueWithTime: null } }]);
+    });
+
+    it('maps is_done true to isDone + doneOn and false to isDone + doneOn null', async () => {
+      mockPlugin([]);
+      await callTool('bulk_update_tasks', {
+        updates: [
+          { task_id: 'a', is_done: true },
+          { task_id: 'b', is_done: false },
+        ],
+      });
+      const payload = lastBulkPayload();
+      expect(payload[0].data.isDone).toBe(true);
+      expect(typeof payload[0].data.doneOn).toBe('number');
+      expect(payload[1].data).toEqual({ isDone: false, doneOn: null });
+    });
+
+    it('passes time_spent_on_day through for bucket corrections', async () => {
+      mockPlugin([]);
+      await callTool('bulk_update_tasks', {
+        updates: [{ task_id: 'a', time_spent_on_day: { '2026-08-05': 60000 } }],
+      });
+      expect(lastBulkPayload()).toEqual([{ taskId: 'a', data: { time_spent_on_day: { '2026-08-05': 60000 } } }]);
+    });
+
+    it('combines mixed fields in one item', async () => {
+      mockPlugin([]);
+      await callTool('bulk_update_tasks', {
+        updates: [{ task_id: 'a', title: 'Renamed', due_with_time: TODAY_MS + 10 * HOUR, is_done: true }],
+      });
+      const item = lastBulkPayload()[0];
+      expect(item.data).toMatchObject({ title: 'Renamed', dueWithTime: TODAY_MS + 10 * HOUR, isDone: true });
+      expect(typeof (item.data as Record<string, unknown>).doneOn).toBe('number');
+    });
+
+    it('echoes effective tasks after the writes (verification in one round-trip)', async () => {
+      mockPlugin([
+        task({ id: 'a', title: 'A', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+        task({ id: 'b', title: 'B', dueWithTime: TODAY_MS + 11 * HOUR, timeEstimate: HOUR }),
+      ]);
+      mockSend.mockResolvedValueOnce(mockResponse({ results: [{ id: 'a', success: true }, { id: 'b', success: true }] }));
+      const data = okData(await callTool('bulk_update_tasks', {
+        updates: [{ task_id: 'a', due_with_time: TODAY_MS + 10 * HOUR }, { task_id: 'b', due_with_time: TODAY_MS + 12 * HOUR }],
+      }));
+      expect(data.results).toHaveLength(2);
+      expect(data.tasks.a.plannedTime).toBe(TODAY_MS + 9 * HOUR);
+      expect(data.tasks.b.plannedTime).toBe(TODAY_MS + 11 * HOUR);
+    });
+  });
 });

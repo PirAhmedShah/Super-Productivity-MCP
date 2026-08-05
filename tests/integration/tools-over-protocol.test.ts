@@ -165,6 +165,42 @@ describe('integration: tools over the MCP protocol', () => {
     }
   });
 
+  it('bulk_update_tasks supports due_with_time/is_done and echoes tasks over the wire', async () => {
+    const c = await withServer([
+      task({ id: 'a', title: 'A', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+      task({ id: 'b', title: 'B', dueWithTime: TODAY_MS + 11 * HOUR, timeEstimate: HOUR }),
+    ]);
+    mockSend.mockResolvedValueOnce(mockResponse({ results: [{ id: 'a', success: true }, { id: 'b', success: true }] }));
+    try {
+      const msg = await c.call('bulk_update_tasks', {
+        updates: [
+          { task_id: 'a', due_with_time: TODAY_MS + 10 * HOUR },
+          { task_id: 'b', is_done: true },
+        ],
+      });
+      expect(msg.result.isError).toBeFalsy();
+      const data = JSON.parse(msg.result.content[0].text);
+      expect(data.results).toEqual([{ id: 'a', success: true }, { id: 'b', success: true }]);
+      expect(data.tasks.a.plannedTime).toBe(TODAY_MS + 9 * HOUR);
+      expect(data.tasks.b.isDone).toBe(false);
+    } finally {
+      await c.close();
+    }
+  });
+
+  it('bulk_update_tasks rejects invalid time_spent_on_day date keys via zod', async () => {
+    const c = await withServer([]);
+    try {
+      const msg = await c.call('bulk_update_tasks', {
+        updates: [{ task_id: 'a', time_spent_on_day: { yesterday: 100 } }],
+      });
+      expect(msg.result.isError).toBe(true);
+      expect(msg.result.content[0].text).toContain('bulk_update_tasks');
+    } finally {
+      await c.close();
+    }
+  });
+
   it('invalid arguments fail zod validation with isError', async () => {
     const c = await withServer([]);
     try {

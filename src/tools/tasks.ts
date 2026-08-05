@@ -525,16 +525,22 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
   server.registerTool(
     'bulk_update_tasks',
     {
-      description: 'Update multiple tasks in a single operation. Each item specifies a task_id and the fields to update. Uses partial-success semantics.',
+      description: 'Update multiple tasks in a single operation. Each item specifies a task_id and the fields to update. Uses partial-success semantics. Supports the full update_task field set (title, notes, due_day, due_with_time, is_done, tag_ids, time_estimate, time_spent, time_spent_on_day); after the writes the affected tasks are re-fetched and echoed under `tasks` (id → effective task, incl. plannedTime) so the result is verifiable in one round-trip.',
       inputSchema: {
         updates: z.array(z.object({
           task_id: z.string().describe('Task ID to update'),
           title: z.string().optional().describe('New title'),
           notes: z.string().optional().describe('New notes'),
           due_day: z.string().optional().describe('Due date (YYYY-MM-DD) or empty string to clear'),
+          due_with_time: z.number().nullable().optional().describe('Unix ms timestamp to plan the task at an exact time (maps to SP dueWithTime). Pass null to unplan. Independent from due_day.'),
+          is_done: z.boolean().optional().describe('Mark as done/undone'),
           tag_ids: z.array(z.string()).optional().describe('Replace all tags'),
           time_estimate: z.number().optional().describe('Time estimate in ms'),
           time_spent: z.number().optional().describe('Time spent in ms'),
+          time_spent_on_day: z
+            .record(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD'), z.number().int().nonnegative().describe('ms'))
+            .optional()
+            .describe('Merge these per-day values into the timeSpentOnDay bucket (corrections; dates not listed are untouched; total timeSpent is recomputed as the bucket sum unless time_spent is also given)'),
         })).max(100).describe('Array of task updates'),
       },
     },
@@ -545,14 +551,18 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
           ...(u.title !== undefined && { title: u.title }),
           ...(u.notes !== undefined && { notes: u.notes }),
           ...(u.due_day !== undefined && { dueDay: u.due_day || null }),
+          ...(u.due_with_time !== undefined && { dueWithTime: u.due_with_time }),
+          ...(u.is_done !== undefined && { isDone: u.is_done, doneOn: u.is_done ? Date.now() : null }),
           ...(u.tag_ids !== undefined && { tagIds: u.tag_ids }),
           ...(u.time_estimate !== undefined && { timeEstimate: u.time_estimate }),
           ...(u.time_spent !== undefined && { timeSpent: u.time_spent }),
+          ...(u.time_spent_on_day !== undefined && { time_spent_on_day: u.time_spent_on_day }),
         },
       }));
       const res = await sendCommand(dirs, 'bulkUpdateTasks', { updates: mapped });
       if (!res.success) return errorResult(res.error ?? 'Failed to bulk update tasks');
-      return okResult(res.result);
+      const tasks = await fetchTasksByIds(dirs, (updates ?? []).map(u => u.task_id));
+      return okResult({ ...((res.result as Record<string, unknown> | null) ?? {}), tasks });
     },
   );
 
