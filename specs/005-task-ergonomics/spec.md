@@ -2,7 +2,7 @@
 
 **Feature Branch**: `005-task-ergonomics`
 **Created**: 2026-04-29
-**Status**: Draft
+**Status**: Implemented
 **Input**: Three improvements to task operations — response shaping for token efficiency, delete task for CRUD completeness, and batch subtask creation for planning workflows.
 
 ## User Scenarios & Testing *(mandatory)*
