@@ -10,9 +10,9 @@ The official `PluginAPI` interface (from `@super-productivity/plugin-api`) does 
 - `setCurrentTask` / `startTracking` — no direct timer control method
 - `deleteTask` — no task deletion method
 
-**Available escape hatch**: `PluginAPI.dispatchAction(action: any)` dispatches arbitrary NgRx actions to SP's store. This enables:
-- Timer start: `dispatchAction({ type: '[Task] Set Current Task', payload: { task } })`
-- Timer stop: `dispatchAction({ type: '[Task] Unset Current Task' })`
+**Available escape hatch**: `PluginAPI.dispatchAction(action: any)` dispatches arbitrary NgRx actions to SP's store, subject to the bridge's `ALLOWED_PLUGIN_ACTIONS` whitelist. This enables:
+- Timer start: `dispatchAction({ type: '[Task] SetCurrentTask', id })`
+- Timer stop: `dispatchAction({ type: '[Task] SetCurrentTask', id: null })` (unsetCurrentTask not whitelisted)
 - Task delete: `dispatchAction({ type: '[Task] Delete Task', payload: { task } })`
 
 **Timer state detection** (existing pattern): A task with `currentTimestamp > 0` has an active timer. This field is not in the official `Task` type but exists at runtime.
@@ -88,22 +88,23 @@ New field added to `TaskFilters` in `src/ipc/types.ts`:
 
 ```typescript
 {
-  type: '[Task] Set Current Task',
-  payload: { task: taskObject }  // full task object required
+  type: '[Task] SetCurrentTask',
+  id: 'taskId'   // task id string
 }
 ```
 
-SP behaviour: Starting a task while another is tracked automatically stops the previous timer.
+SP behaviour: Starting a task while another is tracked automatically stops the previous timer. Verified on SP 18.16: `ALLOWED_PLUGIN_ACTIONS` whitelists `setCurrentTask`; the action payload is `{ id: string | null }`, NOT a full task object.
 
 ### Stop Timer
 
 ```typescript
 {
-  type: '[Task] Unset Current Task'
+  type: '[Task] SetCurrentTask',
+  id: null   // clears currentTaskId; same reducer effect as unsetCurrentTask
 }
 ```
 
-SP behaviour: Idempotent — dispatching when no timer is running is a no-op.
+SP behaviour: Idempotent — dispatching when no timer is running is a no-op. Note: `[Task] UnsetCurrentTask` exists in SP's action set but is NOT on the plugin bridge's allowed-action whitelist, so stop must use `SetCurrentTask` with `id: null`.
 
 ### Delete Task
 
@@ -121,9 +122,9 @@ SP behaviour: Deleting a parent task also deletes all subtasks.
 ### Timer
 
 ```
-no timer  --start_task(T)-->  T.currentTimestamp = Date.now()
-T active  --start_task(U)-->  T stops, U.currentTimestamp = Date.now()
-T active  --stop_task()-->    T.currentTimestamp = 0
+no timer  --start_task(T)-->  [Task] SetCurrentTask(T) + T.currentTimestamp = Date.now()
+T active  --start_task(U)-->  T stops, [Task] SetCurrentTask(U) + U.currentTimestamp = Date.now()
+T active  --stop_task()-->    [Task] SetCurrentTask(null) + T.currentTimestamp = 0
 no timer  --stop_task()-->    no-op (idempotent)
 T done    --start_task(T)-->  ERROR: cannot track completed task
 ```

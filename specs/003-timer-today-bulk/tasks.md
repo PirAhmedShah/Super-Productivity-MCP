@@ -32,8 +32,8 @@
 
 **Independent Test**: Start timer on a task, verify `get_current_task` returns it. Stop timer, verify null.
 
-- [ ] T002 [P] [US1] Add `startTask` command handler in `plugin/plugin.js`: read task via `getTasks()`, validate not done, dispatch `[Task] Set Current Task` NgRx action with full task object
-- [ ] T003 [P] [US1] Add `stopTask` command handler in `plugin/plugin.js`: dispatch `[Task] Unset Current Task` NgRx action (idempotent)
+- [ ] T002 [P] [US1] Add `startTask` command handler in `plugin/plugin.js`: read task via `getTasks()`, validate not done, dispatch `[Task] SetCurrentTask` NgRx action with `{ id }`
+- [ ] T003 [P] [US1] Add `stopTask` command handler in `plugin/plugin.js`: dispatch `[Task] SetCurrentTask` NgRx action with `{ id: null }` (idempotent)
 - [ ] T004 [P] [US1] Add `start_task` tool in `src/tools/tasks.ts`: input `task_id`; sends `startTask` command
 - [ ] T005 [P] [US1] Add `stop_task` tool in `src/tools/tasks.ts`: no inputs; sends `stopTask` command
 - [ ] T006 [P] [US1] Write unit tests for US1 timer operations in `tests/unit/tools/tasks.test.ts`: cover start (success, already tracking, done task error), stop (success, idempotent)
@@ -160,7 +160,7 @@ Parallel group C (tests):
 ## Notes
 
 - `dispatchAction` does not return a promise — fire-and-forget. Plugin should verify state after dispatch if needed.
-- NgRx action `[Task] Set Current Task` requires the full task object, not just the ID. Plugin must read the task first.
+- NgRx action `[Task] SetCurrentTask` takes `{ id: string | null }`, not a full task object (verified on SP 18.16). Plugin still reads the task first to validate existence and done state.
 - NgRx action `[Task] Delete Task` also requires the full task object.
 - Bulk operations are processed sequentially within the plugin to avoid race conditions on shared state.
 - Empty array input to bulk operations returns `{ results: [] }` — not an error.

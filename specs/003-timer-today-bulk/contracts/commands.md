@@ -12,7 +12,7 @@
 
 Start the time tracker on a task. If another task is being tracked, SP automatically stops it.
 
-**Plugin handler**: Reads task via `getTasks()`, validates not done, dispatches `[Task] Set Current Task` NgRx action.
+**Plugin handler**: Reads task via `getTasks()`, validates not done, dispatches `[Task] SetCurrentTask` NgRx action with `{ id }`.
 
 **Request**:
 ```json
@@ -37,7 +37,7 @@ Start the time tracker on a task. If another task is being tracked, SP automatic
 
 Stop the currently running timer. Idempotent — succeeds silently if no timer is running.
 
-**Plugin handler**: Dispatches `[Task] Unset Current Task` NgRx action.
+**Plugin handler**: Dispatches `[Task] SetCurrentTask` NgRx action with `{ id: null }` (clears currentTaskId; unsetCurrentTask not whitelisted).
 
 **Request**:
 ```json

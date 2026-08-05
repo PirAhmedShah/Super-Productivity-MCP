@@ -1,6 +1,6 @@
 // MCP Bridge Plugin for Super Productivity
 // Keep PLUGIN_VERSION in sync with manifest.json "version".
-const PLUGIN_VERSION = '1.7.1';
+const PLUGIN_VERSION = '1.7.2';
 const PROTOCOL_VERSION = 1;
 const POLL_INTERVAL_MS = 2000;
 let commandDir = null;
@@ -537,9 +537,11 @@ async function executeCommand(command) {
         break;
       }
       case 'startTask': {
-        // Marker-only: records which task the agent is working on (task.currentTimestamp).
-        // The live UI timer can't be driven reliably from a plugin (SP's ticker throttles in
-        // unfocused windows), so actual time accounting is done agent-side via addTimeToday.
+        // Drive SP's REAL timer via the whitelisted NgRx action so the UI shows
+        // the ticking timer and SP accrues timeSpentOnDay natively. Also write
+        // task.currentTimestamp as a marker so loadCurrentTask can report it.
+        // dispatchAction is fire-and-forget (void); on older SP builds where the
+        // action may not exist/reject, we fall back to marker-only behaviour.
         const allTasksForStart = await PluginAPI.getTasks();
         const taskForStart = allTasksForStart.find(t => t.id === command.taskId);
         if (!taskForStart) {
@@ -553,18 +555,30 @@ async function executeCommand(command) {
         if (currentlyTracked) {
           await PluginAPI.updateTask(currentlyTracked.id, { currentTimestamp: null });
         }
+        try {
+          PluginAPI.dispatchAction({ type: '[Task] SetCurrentTask', id: command.taskId });
+        } catch (e) {
+          console.error('startTask: dispatchAction rejected, marker-only fallback:', e);
+        }
         await PluginAPI.updateTask(command.taskId, { currentTimestamp: Date.now() });
         result = null;
         break;
       }
       case 'stopTask': {
-        // Find the currently tracked task and clear its currentTimestamp.
+        // Stop SP's real timer: unsetCurrentTask is NOT in the allowed-action
+        // whitelist, but setCurrentTask with id:null clears currentTaskId (same
+        // reducer effect). Then clear the marker. Idempotent — no error if
+        // nothing is being tracked.
+        try {
+          PluginAPI.dispatchAction({ type: '[Task] SetCurrentTask', id: null });
+        } catch (e) {
+          console.error('stopTask: dispatchAction rejected, marker-only fallback:', e);
+        }
         const allTasksForStop = await PluginAPI.getTasks();
         const tracked = allTasksForStop.find(t => t.currentTimestamp > 0);
         if (tracked) {
           await PluginAPI.updateTask(tracked.id, { currentTimestamp: null });
         }
-        // Idempotent — no error if nothing is being tracked
         result = null;
         break;
       }

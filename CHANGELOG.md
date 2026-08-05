@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions align with the SP plugin manifest and the npm package.
 
+## [1.7.2] — 2026-08-05
+
+### Fixed
+- **`start_task`/`stop_task` now drive SP's real timer (UI ticker + native accrual)** — previously they only wrote a `currentTimestamp` marker, so the Super Productivity UI never showed a running timer and `timeSpentOnDay` was only accruable agent-side. The plugin now also dispatches the whitelisted NgRx action `[Task] SetCurrentTask` (`id` to start, `id: null` to stop; `unsetCurrentTask` is not on the allowed-action whitelist), which starts/stops SP's native ticker. The marker write is kept as a verification signal, and a catch-all falls back to marker-only behaviour on SP builds where the action is rejected. Live-verified against SP 18.16.0.
+
 ## [1.7.1] — 2026-08-05
 
 ### Fixed
