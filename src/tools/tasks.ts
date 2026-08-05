@@ -20,7 +20,6 @@ interface TaskRecord {
   notes?: string;
   dueDay?: string | null;
   dueWithTime?: number | null;
-  plannedAt?: number | null;
   timeSpentOnDay?: Record<string, number>;
   timeEstimate: number;
   timeSpent: number;
@@ -32,12 +31,10 @@ interface TaskRecord {
 
 
 /**
- * Shape a task for API responses: strip the obsolete `plannedAt` key (its stale null value is a
- * verification trap) and expose the canonical value as `plannedTime`.
+ * Shape a task for API responses: expose the canonical planned time as `plannedTime`.
  */
 export function shapeForResponse(t: TaskRecord): Record<string, unknown> {
   const copy: Record<string, unknown> = { ...t };
-  delete copy.plannedAt;
   copy.plannedTime = plannedTimeOf(t);
   return copy;
 }
@@ -154,8 +151,7 @@ export function projectFields(t: TaskRecord, fields: string[], now: number, refs
   const enriched = needRefs ? enrichTask(t, refs) : null;
   const obj: Record<string, unknown> = {};
   for (const f of fields) {
-    if (f === 'plannedAt' || f === 'plannedTime') {
-      // plannedAt is obsolete/stale; remap both names to the effective value
+    if (f === 'plannedTime') {
       obj[f] = plannedTimeOf(t);
     } else if (DERIVED_SCHEDULE_FIELDS.includes(f)) {
       obj[f] = (deriveSchedule(t, now) as unknown as Record<string, unknown>)[f];
@@ -266,7 +262,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         sort_by: z.enum(['planned_time', 'title', 'due_day', 'time_estimate']).optional().describe('Sort result by this field'),
         sort_dir: z.enum(['asc', 'desc']).optional().default('asc').describe('Sort direction (default asc)'),
         include_schedule: z.boolean().optional().default(false).describe('Append a derived schedule block { startMs, endMs, startTime, endTime, durationMs, status } to each full task (start = plannedTime, size = timeEstimate). Ignored when fields is provided.'),
-        fields: z.array(z.string()).optional().describe('Return only these fields per task (e.g. ["id", "title", "dueDay"]). Omit for full objects. "plannedTime" returns the effective planned timestamp (SP field dueWithTime); "plannedAt" is a deprecated alias of it. Derived schedule fields are also supported: "startMs", "endMs", "startTime", "endTime", "durationMs", "status".'),
+        fields: z.array(z.string()).optional().describe('Return only these fields per task (e.g. ["id", "title", "dueDay"]). Omit for full objects. "plannedTime" returns the effective planned timestamp (SP field dueWithTime). Derived schedule fields are also supported: "startMs", "endMs", "startTime", "endTime", "durationMs", "status".'),
       },
     },
     async ({ project_id, tag_id, include_done, include_archived, search_query, parents_only, overdue, unscheduled, planned_for_today, recurring_only, scheduled_on, completed_on, overlapping, sort_by, sort_dir, include_schedule, fields }) => {
@@ -308,8 +304,8 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         return okResult(tasks.map(t => projectFields(t, fields, now, refs)));
       }
 
-      // Full objects: strip obsolete plannedAt, expose canonical plannedTime alias,
-      // resolve project/tag names, optionally append the derived schedule block
+      // Full objects: expose canonical plannedTime, resolve project/tag names,
+      // optionally append the derived schedule block
       const refs = await loadRefs(dirs);
       if (include_schedule) {
         return okResult(tasks.map(t => ({ ...shapeForResponse(enrichTask(t, refs)), schedule: deriveSchedule(t, now) })));
@@ -351,7 +347,6 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         is_done: z.boolean().optional().describe('Mark as done/undone'),
         due_day: z.string().optional().describe('Due date in ISO format (e.g. 2026-04-20), or empty string to clear'),
         due_with_time: z.number().nullable().optional().describe('Unix ms timestamp to plan task at an exact time (maps to SP dueWithTime; e.g. Date.now() = "plan from now until next task"). Pass null to unplan. Independent from due_day.'),
-        planned_at: z.number().nullable().optional().describe('DEPRECATED: alias of due_with_time (both map to SP dueWithTime; the legacy plannedAt field is obsolete). Prefer due_with_time.'),
         time_estimate: z.number().optional().describe('Time estimate in milliseconds'),
         time_spent: z.number().optional().describe('Time spent in milliseconds'),
         time_spent_on_day: z
@@ -361,7 +356,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         tag_ids: z.array(z.string()).optional().describe('Bulk-replace all tags with this list (FR-003)'),
       },
     },
-    async ({ task_id, title, notes, is_done, due_day, due_with_time, planned_at, time_estimate, time_spent, time_spent_on_day, tag_ids }) => {
+    async ({ task_id, title, notes, is_done, due_day, due_with_time, time_estimate, time_spent, time_spent_on_day, tag_ids }) => {
       if (!task_id?.trim()) return errorResult('task_id is required');
 
       const data: Record<string, unknown> = {};
@@ -372,8 +367,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         data.doneOn = is_done ? Date.now() : null;
       }
       if (due_day !== undefined) data.dueDay = due_day || null;
-      const planned = due_with_time !== undefined ? due_with_time : planned_at;
-      if (planned !== undefined) data.dueWithTime = planned;
+      if (due_with_time !== undefined) data.dueWithTime = due_with_time;
       if (time_estimate !== undefined) data.timeEstimate = time_estimate;
       if (time_spent !== undefined) data.timeSpent = time_spent;
       if (time_spent_on_day !== undefined) data.time_spent_on_day = time_spent_on_day;
@@ -663,12 +657,12 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
     async ({ task_ids, plan_from_now, unplan }) => {
       if (!task_ids?.length) return okResult({ results: [] });
       const now = new Date();
-      const plannedAt = unplan
+      const dueWithTime = unplan
         ? null
         : plan_from_now
           ? now.getTime()
           : new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      const updates = task_ids.map(id => ({ taskId: id, data: { dueWithTime: plannedAt } }));
+      const updates = task_ids.map(id => ({ taskId: id, data: { dueWithTime } }));
       const res = await sendCommand(dirs, 'bulkUpdateTasks', { updates });
       if (!res.success) return errorResult(res.error ?? 'Failed to plan tasks');
       const tasks = await fetchTasksByIds(dirs, task_ids);

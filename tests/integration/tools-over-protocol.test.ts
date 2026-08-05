@@ -40,7 +40,6 @@ const task = (overrides: Record<string, unknown> = {}): Record<string, unknown> 
   notes: '',
   dueDay: null,
   dueWithTime: null,
-  plannedAt: null,
   timeEstimate: 0,
   timeSpent: 0,
   doneOn: null,

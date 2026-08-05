@@ -37,7 +37,6 @@ const task = (overrides: TaskFixture = {}): TaskFixture => ({
   notes: '',
   dueDay: null,
   dueWithTime: null,
-  plannedAt: null,
   timeEstimate: 0,
   timeSpent: 0,
   doneOn: null,

@@ -1,13 +1,32 @@
 // MCP Bridge Plugin for Super Productivity
 // Keep PLUGIN_VERSION in sync with manifest.json "version".
-const PLUGIN_VERSION = '1.7.3';
+const PLUGIN_VERSION = '1.8.0';
 const PROTOCOL_VERSION = 1;
+// This plugin is built for SP 18.16.0 only; older builds are refused with a clear error
+// instead of silently degrading (no marker-only timer fallback, no legacy plannedAt paths).
+const MIN_SUP_VERSION = '18.16.0';
 const POLL_INTERVAL_MS = 2000;
 let commandDir = null;
 let responseDir = null;
 let pollTimer = null;
 let lastProcessed = 0;
 let currentTrackedTask = null;
+
+function isAtLeast(installed, min) {
+  const a = String(installed || '').split('.');
+  const b = min.split('.');
+  for (let i = 0; i < 3; i++) {
+    const ai = parseInt(a[i], 10) || 0;
+    const bi = parseInt(b[i], 10) || 0;
+    if (ai > bi) return true;
+    if (ai < bi) return false;
+  }
+  return true;
+}
+
+function getAppVersion() {
+  return (typeof PluginAPI.cfg !== 'undefined' && PluginAPI.cfg && PluginAPI.cfg.appVersion) || null;
+}
 
 function unwrapNodeResult(result) {
   return result && result.success && result.result && typeof result.result === 'object' ? result.result : result;
@@ -200,7 +219,7 @@ async function runBatchUpdateForProject(api, data) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseAtDateSyntax, stripResidualDateTokens, mergeTimeSpentOnDay, runBatchUpdateForProject, rewriteBatchOp };
+  module.exports = { parseAtDateSyntax, stripResidualDateTokens, mergeTimeSpentOnDay, runBatchUpdateForProject, rewriteBatchOp, isAtLeast, MIN_SUP_VERSION };
 }
 
 async function setupDirectories() {
@@ -348,6 +367,19 @@ async function executeCommand(command) {
       error: `Unsupported protocol version ${command.protocolVersion}. Plugin supports up to version ${PROTOCOL_VERSION}. Please update the plugin.`,
       timestamp: Date.now(),
     };
+  }
+
+  // Hard version gate: refuse everything except ping (check_connection) on unsupported SP
+  // builds, so agents get a clear error instead of silently degraded behavior.
+  if (command.action !== 'ping') {
+    const appVersion = getAppVersion();
+    if (appVersion && !isAtLeast(appVersion, MIN_SUP_VERSION)) {
+      return {
+        success: false,
+        error: `Super-Productivity-MCP ${PLUGIN_VERSION} requires Super Productivity ${MIN_SUP_VERSION}+ (found ${appVersion}). Older builds are unsupported. Update Super Productivity and re-upload the plugin.`,
+        timestamp: Date.now(),
+      };
+    }
   }
 
   let result;
@@ -576,8 +608,6 @@ async function executeCommand(command) {
         // Drive SP's REAL timer via the whitelisted NgRx action so the UI shows
         // the ticking timer and SP accrues timeSpentOnDay natively. Also write
         // task.currentTimestamp as a marker so loadCurrentTask can report it.
-        // dispatchAction is fire-and-forget (void); on older SP builds where the
-        // action may not exist/reject, we fall back to marker-only behaviour.
         const allTasksForStart = await PluginAPI.getTasks();
         const taskForStart = allTasksForStart.find(t => t.id === command.taskId);
         if (!taskForStart) {
@@ -591,11 +621,7 @@ async function executeCommand(command) {
         if (currentlyTracked) {
           await PluginAPI.updateTask(currentlyTracked.id, { currentTimestamp: null });
         }
-        try {
-          PluginAPI.dispatchAction({ type: '[Task] SetCurrentTask', id: command.taskId });
-        } catch (e) {
-          console.error('startTask: dispatchAction rejected, marker-only fallback:', e);
-        }
+        PluginAPI.dispatchAction({ type: '[Task] SetCurrentTask', id: command.taskId });
         await PluginAPI.updateTask(command.taskId, { currentTimestamp: Date.now() });
         result = null;
         break;
@@ -605,11 +631,7 @@ async function executeCommand(command) {
         // whitelist, but setCurrentTask with id:null clears currentTaskId (same
         // reducer effect). Then clear the marker. Idempotent — no error if
         // nothing is being tracked.
-        try {
-          PluginAPI.dispatchAction({ type: '[Task] SetCurrentTask', id: null });
-        } catch (e) {
-          console.error('stopTask: dispatchAction rejected, marker-only fallback:', e);
-        }
+        PluginAPI.dispatchAction({ type: '[Task] SetCurrentTask', id: null });
         const allTasksForStop = await PluginAPI.getTasks();
         const tracked = allTasksForStop.find(t => t.currentTimestamp > 0);
         if (tracked) {
@@ -674,23 +696,19 @@ async function executeCommand(command) {
       }
       case 'getAppState': {
         // Full state snapshot (tasks, projects, tags, taskRepeatCfgs, notes, counters, config...).
+        // All supported SP builds (18.16.0+) expose PluginAPI.getAppState; a missing method
+        // here means a build outside the support window — fail loudly rather than degrade.
         if (typeof PluginAPI.getAppState !== 'function') {
-          const appVersion = (typeof PluginAPI.cfg !== 'undefined' && PluginAPI.cfg && PluginAPI.cfg.appVersion) || 'unknown';
-          return { success: false, error: `getAppState unavailable on this Super Productivity build (appVersion: ${appVersion}). Requires SP from 2026-05-26 or later (PR #7803).`, timestamp: Date.now() };
+          return { success: false, error: `PluginAPI.getAppState is unavailable in this Super Productivity build (appVersion: ${getAppVersion()}). Super-Productivity-MCP requires SP ${MIN_SUP_VERSION}+.`, timestamp: Date.now() };
         }
         result = await PluginAPI.getAppState();
         break;
       }
       case 'getTaskRepeatCfgs': {
-        // PluginAPI.getAppState (which carries taskRepeatCfgs) only exists in SP builds
-        // from 2026-05-26+ (super-productivity PR #7803). On older builds no other API
-        // exposes repeat configs (tasks only carry repeatCfgId), so fail with an
-        // actionable error instead of crashing on a missing method.
         if (typeof PluginAPI.getAppState !== 'function') {
-          const appVersion = (typeof PluginAPI.cfg !== 'undefined' && PluginAPI.cfg && PluginAPI.cfg.appVersion) || 'unknown';
           return {
             success: false,
-            error: `getAppState unavailable on this Super Productivity build (appVersion: ${appVersion}). Reading task repeat configs requires SP from 2026-05-26 or later (getAppState API, PR #7803). Until then, use get_tasks with recurring_only to list tasks that have a repeatCfgId.`,
+            error: `PluginAPI.getAppState is unavailable in this Super Productivity build (appVersion: ${getAppVersion()}). Reading task repeat configs requires SP ${MIN_SUP_VERSION}+.`,
             timestamp: Date.now(),
           };
         }
@@ -773,7 +791,7 @@ async function executeCommand(command) {
         break;
       }
       case 'ping':
-        result = { pong: true, pluginVersion: PLUGIN_VERSION, protocolVersion: PROTOCOL_VERSION, appVersion: (typeof PluginAPI.cfg !== 'undefined' && PluginAPI.cfg && PluginAPI.cfg.appVersion) || null };
+        result = { pong: true, pluginVersion: PLUGIN_VERSION, protocolVersion: PROTOCOL_VERSION, appVersion: getAppVersion(), minSupVersion: MIN_SUP_VERSION };
         break;
       default:
         return { success: false, error: `Unknown command action: ${command.action}`, timestamp: Date.now() };

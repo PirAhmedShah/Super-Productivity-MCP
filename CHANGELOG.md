@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions align with the SP plugin manifest and the npm package.
 
+## [1.8.0] — 2026-08-05
+
+### Breaking
+- **Super Productivity 18.16.0+ only.** The plugin now hard-gates on the app version: on older builds every command except `check_connection` fails with a clear error instead of silently degrading. `minSupVersion` in the manifest is `18.16.0`, and `check_connection` now reports `minSupVersion` alongside `appVersion`.
+
+### Removed (legacy support paths)
+- **`planned_at` parameter on `update_task`** — `due_with_time` is the only way to set the planned time.
+- **`plannedAt` as a `get_tasks` `fields` alias** — only `plannedTime` (the effective planned timestamp, SP `dueWithTime`) is supported.
+- **Legacy `plannedAt` read fallback** in `plannedTimeOf` — `dueWithTime` is the only planned-time source; `plannedAt`-only tasks have no planned time.
+- **Marker-only timer fallback** in `start_task`/`stop_task` — the `[Task] SetCurrentTask` dispatch is unconditional; a rejected dispatch now surfaces as an error rather than silently falling back.
+- **`getAppState` version-guard workarounds** (the "requires SP from 2026-05-26" messages and the `get_tasks recurring_only` workaround hint) — replaced with a single "requires SP 18.16.0+" error.
+
 ## [1.7.3] — 2026-08-05
 
 ### Added

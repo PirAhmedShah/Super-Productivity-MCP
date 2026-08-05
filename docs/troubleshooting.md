@@ -77,11 +77,6 @@ The MCP server and SP plugin must be on the same version. After updating one, al
 
 ## Stale Plugin Symptoms
 
-Two bugs were fixed in recent plugin versions but *look* like app behavior if you're on an older `plugin.zip`:
+If tasks behave oddly after plugin writes (mangled titles, silently dropped subtasks, ignored reorders), the deployed `plugin.zip` is older than the latest release. Check the deployed version with *"Check the Super Productivity connection"* (`pluginVersion` in the response), then re-download `plugin.zip` from the [latest release](https://github.com/PirAhmedShah/Super-Productivity-MCP/releases/latest) and upload it in **Settings → Plugins**.
 
-| Symptom | Fixed in | Remedy |
-|---------|----------|--------|
-| Task titles mangled after plugin writes: date-like `@tokens` (`@date`, `@tomorrow`, month names…) stripped or due dates clobbered | 1.7.0 (SP 18.16 chrono re-parses plugin titles) | Re-upload plugin.zip |
-| `batch_update_project` silently drops subtasks created under a same-batch parent, or reorders with temp ids no-op | 1.7.1 (plugin resolves temp refs itself) | Re-upload plugin.zip |
-
-To check the deployed version, ask *"Check the Super Productivity connection"* — `pluginVersion` in the response. Then re-download `plugin.zip` from the [latest release](https://github.com/PirAhmedShah/Super-Productivity-MCP/releases/latest) and upload it in **Settings → Plugins**.
+The plugin also hard-requires Super Productivity 18.16.0+ — on older builds every command except `check_connection` fails with a clear version error.

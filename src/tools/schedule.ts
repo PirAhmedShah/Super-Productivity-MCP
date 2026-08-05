@@ -18,7 +18,6 @@ export interface SchedulableTask {
   notes?: string;
   dueDay?: string | null;
   dueWithTime?: number | null;
-  plannedAt?: number | null;
   timeEstimate?: number;
   timeSpent?: number;
   doneOn?: number | null;
@@ -31,12 +30,10 @@ export function localDateStr(d: Date = new Date()): string {
 }
 
 /**
- * Effective "planned at" timestamp of a task.
- * SP >= 14.0 stores it in `dueWithTime`; `plannedAt` is the obsolete field (always null in
- * current SP) kept only as a legacy fallback for old data. ALWAYS read this, never `plannedAt`.
+ * Effective "planned at" timestamp of a task — SP stores it in `dueWithTime`.
  */
 export function plannedTimeOf(t: SchedulableTask): number | null {
-  return t.dueWithTime ?? t.plannedAt ?? null;
+  return t.dueWithTime ?? null;
 }
 
 export type ScheduleStatus = 'done' | 'in-progress' | 'past' | 'upcoming' | 'unsized';

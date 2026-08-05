@@ -26,10 +26,10 @@ describe('localDateStr / plannedTimeOf (moved helpers)', () => {
     expect(localDateStr(new Date(2026, 7, 4, 0, 5))).toBe('2026-08-04');
   });
 
-  it('reads dueWithTime as effective planned time with legacy fallback', () => {
-    expect(plannedTimeOf(task({ dueWithTime: NINE_AM, plannedAt: null }))).toBe(NINE_AM);
-    expect(plannedTimeOf(task({ dueWithTime: null, plannedAt: NINE_AM }))).toBe(NINE_AM);
-    expect(plannedTimeOf(task({ dueWithTime: null, plannedAt: null }))).toBeNull();
+  it('reads dueWithTime as the effective planned time', () => {
+    expect(plannedTimeOf(task({ dueWithTime: NINE_AM }))).toBe(NINE_AM);
+    expect(plannedTimeOf(task({ dueWithTime: null }))).toBeNull();
+    expect(plannedTimeOf({ id: 'x' } as any)).toBeNull();
   });
 });
 
@@ -62,7 +62,7 @@ describe('deriveSchedule', () => {
   });
 
   it('marks status unsized when there is no planned time', () => {
-    const s = deriveSchedule(task({ dueWithTime: null, plannedAt: null }), NOW);
+    const s = deriveSchedule(task({ dueWithTime: null }), NOW);
     expect(s.status).toBe('unsized');
     expect(s.startMs).toBeNull();
     expect(s.endMs).toBeNull();

@@ -15,7 +15,6 @@ interface TaskRecord {
   tagIds: string[];
   dueDay?: string | null;
   dueWithTime?: number | null;
-  plannedAt?: number | null;
   timeEstimate: number;
   timeSpent: number;
   [key: string]: unknown;

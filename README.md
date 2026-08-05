@@ -46,7 +46,7 @@ Download `plugin.zip` from the [latest release](https://github.com/PirAhmedShah/
 
 Then in Super Productivity: **Settings → Plugins → Upload Plugin**, select `plugin.zip`, restart SP.
 
-> **SP ≥ 18.13.0:** After enabling the plugin, SP shows a one-time **Node execution consent dialog**. Click **Allow** — the plugin requires Node access to communicate with the MCP server. Consent persists per device; only re-asked if you re-upload the plugin.
+> **SP 18.16.0+:** After enabling the plugin, SP shows a one-time **Node execution consent dialog**. Click **Allow** — the plugin requires Node access to communicate with the MCP server. Consent persists per device; only re-asked if you re-upload the plugin. Older SP builds are unsupported: the plugin refuses commands below 18.16.0 with a clear error.
 
 ### 2. Configure Your MCP Client
 
@@ -129,7 +129,7 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 
 ## Prerequisites
 
-- [Super Productivity](https://super-productivity.com) >= 14.0.0
+- [Super Productivity](https://super-productivity.com) >= 18.16.0 (older builds are refused by the plugin)
 - Node.js >= 18
 - An MCP-compatible client (Claude Desktop, Kiro, etc.)
 
@@ -140,10 +140,10 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 | `create_task` | Create a task (supports SP short syntax) |
 | `create_task_with_subtasks` | Create a parent task + subtasks in one operation |
 | `batch_update_project` | Atomic multi-operation batch on one project (create/update/delete/reorder) in a single call — same-batch `temp_id` references resolve for parents and reorder (plugin ≥ 1.7.1); update/delete need real ids from `createdTaskIds` (see [Atomic batch operations](#atomic-batch-operations)) |
-| `get_tasks` | List tasks — filter by project, tag, done, archived, search (title+notes), `parents_only`, `overdue`, `unscheduled`, `planned_for_today`, `recurring_only`, `scheduled_on`, `completed_on`, `overlapping`, `sort_by`/`sort_dir`, `fields`, `include_schedule`. Full objects expose `plannedTime` (the effective planned timestamp, SP `dueWithTime`); `plannedAt` is a deprecated alias. Derived schedule fields (`startTime`, `endTime`, `startMs`, `endMs`, `durationMs`, `status`) are computable via `fields` or `include_schedule` |
+| `get_tasks` | List tasks — filter by project, tag, done, archived, search (title+notes), `parents_only`, `overdue`, `unscheduled`, `planned_for_today`, `recurring_only`, `scheduled_on`, `completed_on`, `overlapping`, `sort_by`/`sort_dir`, `fields`, `include_schedule`. Full objects expose `plannedTime` (the effective planned timestamp, SP `dueWithTime`). Derived schedule fields (`startTime`, `endTime`, `startMs`, `endMs`, `durationMs`, `status`) are computable via `fields` or `include_schedule` |
 | `get_schedule` | Time-blocked view of a date range: tasks sized by `timeEstimate` (duration) and placed by `plannedTime` (start). Returns `scheduled` (with computed start/end/status), `overlaps` (conflict clusters), `unscheduledInRange`, `completedInRange`, and a `summary`. All items include resolved `projectTitle` + `tags` |
 | `get_task` | Fully-resolved single-task deep-dive: enriched names, derived schedule block, parent title, subtask list, and time spent over the last 14 days |
-| `update_task` | Update title, notes, done state, due date, `due_with_time`, time, `time_spent_on_day` (per-day bucket corrections), tags (`planned_at` is a deprecated alias of `due_with_time`) |
+| `update_task` | Update title, notes, done state, due date, `due_with_time`, time, `time_spent_on_day` (per-day bucket corrections), tags |
 | `complete_task` | Mark a task as complete |
 | `delete_task` | Permanently delete a task (parent deletes subtasks too) |
 | `start_task` | Start the time tracker on a task |
@@ -210,7 +210,6 @@ Project/tag lookups are cached server-side (30s TTL) and invalidated automatical
 
 - **Same-batch references (plugin ≥ 1.7.1):** give new tasks a `temp_id` and later operations in the *same* call may use it as `parent_id` (subtask under a freshly-created parent), inside `reorder` `task_ids`, or in `sub_task_ids` — the plugin resolves temp ids itself before dispatching to SP.
 - **Real ids still required for update/delete:** to update or delete a task you just created in the same batch, run a second call using its real id from the first call's `createdTaskIds` (two-phase pattern).
-- **Stale plugin (< 1.7.1):** same-batch temp references are silently dropped (subtasks never persist, temp-id reorders no-op). Re-upload `plugin.zip` — see [Troubleshooting](#troubleshooting).
 - On partial failure SP drops skipped operations silently (logged server-side), so verify the result.
 
 ## SP Short Syntax
@@ -228,13 +227,11 @@ Include these in task titles and they are parsed automatically:
 
 ## Troubleshooting
 
-**Plugin not loading?** Two common causes:
-- **SP 18.6.0–18.9.x cold-boot race:** toggle the plugin off and on in Settings → Plugins (no restart needed on ≥ 18.6.0).
-- **SP 18.10.0–18.12.x hard block:** update to SP ≥ 18.13.0. After re-uploading the plugin, accept the Node execution consent dialog that appears on first enable.
+**Plugin not loading?** Re-upload `plugin.zip` from the [latest release](https://github.com/PirAhmedShah/Super-Productivity-MCP/releases/latest) and accept the Node execution consent dialog that appears on first enable. The plugin requires SP 18.16.0+; older builds are refused by the plugin itself.
 
 **Commands timing out?** Ask *"Show debug info for Super Productivity"* to check that both sides are using the same data directory. Mac App Store users may need to set `SP_MCP_DATA_DIR`.
 
-**Stale plugin?** If task titles get mangled after plugin writes (date-like `@tokens` stripped, due dates clobbered) or batch operations silently drop subtasks / ignore reorders, the deployed plugin is older than 1.7.0 / 1.7.1. Re-download `plugin.zip` from the [latest release](https://github.com/PirAhmedShah/Super-Productivity-MCP/releases/latest) and re-upload it in Settings → Plugins.
+**Stale plugin?** If tasks behave oddly after plugin writes (mangled titles, dropped subtasks, ignored reorders), the deployed `plugin.zip` is older than the latest release. Re-download it and re-upload in Settings → Plugins.
 
 → [Full troubleshooting guide](docs/troubleshooting.md)
 
@@ -246,13 +243,13 @@ Include these in task titles and they are parsed automatically:
 
 ## Scheduling semantics (planned time)
 
-- The "planned at" time of a task lives in SP's `dueWithTime` field. The legacy `plannedAt` field is obsolete and always `null` in current SP — never read or write it.
+- A task's planned/start time lives in SP's `dueWithTime` field, exposed as `plannedTime` in responses.
 - A task's **size** is its `timeEstimate` (duration) and its **start** is its planned time. `get_schedule` combines the two into a timeline: `startMs = plannedTime`, `endMs = startMs + timeEstimate`.
 - `get_schedule` reports **overlap conflict clusters** — transitively-connected groups of tasks whose scheduled windows intersect. Only open tasks with both a planned time and a positive estimate participate; intervals that merely touch at a boundary are not overlaps. `get_tasks { overlapping: true }` returns just the tasks involved in a conflict. Completed tasks land in `completedInRange` only — never double-listed in `scheduled` (with `include_done`), so the summary counts stay consistent.
 - Derived per-task `status`: `done` → `unsized` (no planned time) → `past` (now ≥ end) → `in-progress` (now ≥ start) → `upcoming`.
 - Get the current wall clock with `get_time` (or `check_connection.serverNow`) — `epochMs` is ready for scheduling; do not shell out to `date`.
-- **Time tracking:** `start_task` / `stop_task` drive SP's real timer — the plugin dispatches the whitelisted NgRx action `[Task] SetCurrentTask` (`{ id }` to start, `{ id: null }` to stop), so the UI shows the ticking timer and SP accrues `timeSpentOnDay[today]` natively (what `get_worklog` sums). The `currentTimestamp` marker write is kept as a verification signal; on SP builds where the action is rejected the plugin falls back to marker-only. `add_time_today { task_id, ms }` remains as a fallback/correction (retroactive accrual, backgrounded-window under-accrual), and `update_task { time_spent_on_day: { 'YYYY-MM-DD': ms } }` corrects the per-day bucket itself (merge semantics; `timeSpent` follows as the bucket sum).
-- `update_task { due_with_time: <unix ms> }` sets the exact planned time (`get_time`'s `epochMs` = "from now until next task"); `null` unplans. `planned_at` is a deprecated alias.
+- **Time tracking:** `start_task` / `stop_task` drive SP's real timer — the plugin dispatches the whitelisted NgRx action `[Task] SetCurrentTask` (`{ id }` to start, `{ id: null }` to stop), so the UI shows the ticking timer and SP accrues `timeSpentOnDay[today]` natively (what `get_worklog` sums). `add_time_today { task_id, ms }` remains as a fallback/correction (retroactive accrual, backgrounded-window under-accrual), and `update_task { time_spent_on_day: { 'YYYY-MM-DD': ms } }` corrects the per-day bucket itself (merge semantics; `timeSpent` follows as the bucket sum).
+- `update_task { due_with_time: <unix ms> }` sets the exact planned time (`get_time`'s `epochMs` = "from now until next task"); `null` unplans.
 - `plan_tasks_for_today` pins tasks to start-of-day (00:00). Use `plan_from_now: true` when an exact start time matters.
 - `@friday 3pm` in a title sets the due date and the exact planned time; `@friday` sets the due date only.
 - To verify a write, read the task's `plannedTime` (alias of `dueWithTime`) from the write response or `get_tasks` — the tools return the resulting task so bad input is caught immediately.
