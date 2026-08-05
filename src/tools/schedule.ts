@@ -161,6 +161,8 @@ export interface ScheduleView {
   unscheduledInRange: EnrichedSchedulableItem[];
   completedInRange: EnrichedSchedulableItem[];
   summary: ScheduleSummary;
+  /** Subtasks hidden by an explicit include_subtasks: false opt-out (null when nothing was filtered). */
+  filteredSubtasks: { count: number; taskIds: string[] } | null;
 }
 
 export interface ScheduleViewOptions {
@@ -172,7 +174,9 @@ export interface ScheduleViewOptions {
 
 /**
  * Build the time-blocked schedule view for a date range, with project/tag names resolved.
- * Shared by the get_schedule tool and the sp://context resource. Exported for reuse.
+ * Subtasks participate by default (matching SP's Today/Schedule UI); with includeSubtasks
+ * false, hidden subtask ids are reported via `view.filteredSubtasks` so filtering is never
+ * silent. Shared by the get_schedule tool and the sp://context resource. Exported for reuse.
  */
 export async function buildScheduleView(dirs: ResolvedDirs, opts: ScheduleViewOptions): Promise<{ ok: true; view: ScheduleView } | { ok: false; error: string }> {
   const { startDate, endDate, includeDone, includeSubtasks } = opts;
@@ -185,9 +189,13 @@ export async function buildScheduleView(dirs: ResolvedDirs, opts: ScheduleViewOp
   const scheduled: SchedulableItem[] = [];
   const unscheduledInRange: SchedulableItem[] = [];
   const completedInRange: SchedulableItem[] = [];
+  const filteredSubtasks: string[] = [];
 
   for (const t of tasks) {
-    if (t.parentId && !includeSubtasks) continue;
+    if (t.parentId && !includeSubtasks) {
+      filteredSubtasks.push(t.id);
+      continue;
+    }
     if (t.isDone) {
       if (!includeDone) continue;
       if (t.doneOn != null) {
@@ -228,6 +236,7 @@ export async function buildScheduleView(dirs: ResolvedDirs, opts: ScheduleViewOp
       unscheduledInRange: enrich(unscheduledInRange),
       completedInRange: enrich(completedInRange),
       summary,
+      filteredSubtasks: filteredSubtasks.length > 0 ? { count: filteredSubtasks.length, taskIds: filteredSubtasks } : null,
     },
   };
 }
@@ -237,12 +246,12 @@ export function registerScheduleTools(server: McpServer, dirs: ResolvedDirs): vo
     'get_schedule',
     {
       description:
-        "Get a time-blocked view of tasks for a date range. Each task's size is its time estimate (timeEstimate = duration) and its start is the planned time (plannedTime/dueWithTime). Returns scheduled tasks with computed start/end/status and resolved projectTitle + tags, overlapping 'conflict clusters' (transitively-overlapping groups of open tasks), tasks due-but-unscheduled in the range, and tasks completed in the range. Only tasks with both a planned time and a positive estimate participate in overlap detection; intervals that merely touch are not overlaps.",
+        "Get a time-blocked view of tasks for a date range. Each task's size is its time estimate (timeEstimate = duration) and its start is the planned time (plannedTime/dueWithTime). Returns scheduled tasks with computed start/end/status and resolved projectTitle + tags, overlapping 'conflict clusters' (transitively-overlapping groups of open tasks), tasks due-but-unscheduled in the range, and tasks completed in the range. Subtasks are included by default, matching SP's own Today/Schedule view; pass include_subtasks: false to see top-level tasks only (the response then reports how many subtasks were hidden in filteredSubtasks). Only tasks with both a planned time and a positive estimate participate in overlap detection; intervals that merely touch are not overlaps.",
       inputSchema: {
         start_date: z.string().optional().describe('Start date (YYYY-MM-DD, local). Defaults to today.'),
         end_date: z.string().optional().describe('End date (YYYY-MM-DD, local). Defaults to start_date.'),
         include_done: z.boolean().optional().default(false).describe('Include completed tasks in the schedule view'),
-        include_subtasks: z.boolean().optional().default(false).describe('Include subtasks in the schedule/overlap analysis (top-level tasks only by default)'),
+        include_subtasks: z.boolean().optional().default(true).describe('Include subtasks in the schedule/overlap analysis (default true — matches SP Today view; set false for top-level tasks only, hidden subtasks are reported in filteredSubtasks)'),
       },
     },
     async ({ start_date, end_date, include_done, include_subtasks }) => {
@@ -253,7 +262,7 @@ export function registerScheduleTools(server: McpServer, dirs: ResolvedDirs): vo
       }
       if (startDate > endDate) return errorResult('start_date must not be after end_date');
 
-      const built = await buildScheduleView(dirs, { startDate, endDate, includeDone: include_done ?? false, includeSubtasks: include_subtasks ?? false });
+      const built = await buildScheduleView(dirs, { startDate, endDate, includeDone: include_done ?? false, includeSubtasks: include_subtasks ?? true });
       if (!built.ok) return errorResult(built.error);
 
       return okResult({

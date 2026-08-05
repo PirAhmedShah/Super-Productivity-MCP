@@ -143,6 +143,23 @@ describe('integration: tools over the MCP protocol', () => {
       expect(data.scheduled.map((t: Record<string, unknown>) => t.taskId)).toEqual(['a', 'b']);
       expect(data.overlaps[0].taskIds).toEqual(['a', 'b']);
       expect(data.summary.scheduledCount).toBe(2);
+      expect(data.filteredSubtasks).toBeNull();
+    } finally {
+      await c.close();
+    }
+  });
+
+  it('get_schedule includes planned subtasks by default over the wire', async () => {
+    const c = await withServer([
+      task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+      task({ id: 'child1', title: 'Child', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+    ]);
+    try {
+      const msg = await c.call('get_schedule', {});
+      expect(msg.result.isError).toBeFalsy();
+      const data = JSON.parse(msg.result.content[0].text);
+      expect(data.scheduled.map((t: Record<string, unknown>) => t.taskId)).toEqual(['child1']);
+      expect(data.summary.scheduledCount).toBe(1);
     } finally {
       await c.close();
     }

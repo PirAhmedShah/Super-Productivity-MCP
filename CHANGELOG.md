@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions align with the SP plugin manifest and the npm package.
 
+## [1.8.1] — 2026-08-05
+
+### Fixed
+- **`get_schedule` now includes subtasks by default** (#9) — previously the default silently dropped every subtask from `scheduled`, `unscheduledInRange`, `completedInRange`, and the summary counts, hiding 8 of 9 planned blocks in the container-parent workflow (SP's own Today/Schedule view shows subtasks). `include_subtasks: false` remains as an explicit opt-out, and the response then reports what was hidden via a new `filteredSubtasks: { count, taskIds } | null` field — filtering can never be silent again. Verified by 6 new handler tests + 1 integration test.
+- **`sp://context` includes subtasks in today's schedule** (#11) — the one-fetch session bootstrap hardcoded `includeSubtasks: false`, so the morning snapshot missed subtask plans entirely. Now matches `sp://tasks/today` and SP's Today view (new resource test).
+
 ## [1.8.0] — 2026-08-05
 
 ### Breaking

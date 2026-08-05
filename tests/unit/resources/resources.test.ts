@@ -152,5 +152,28 @@ describe('MCP Resources', () => {
       expect(data.currentTask.title).toBe('Active');
       expect(data.currentTask.projectTitle).toBe('Work');
     });
+
+    it('includes planned subtasks in today.scheduled (subtask visibility)', async () => {
+      const now = new Date();
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      const proj = { id: 'p1', title: 'Work', theme: { primary: '#2196F3' } };
+      const tag = { id: 't1', title: 'urgent', theme: { primary: '#FF5722' } };
+      const subtask = {
+        id: 'child', title: 'Sub', projectId: 'p1', tagIds: ['t1'], isDone: false, parentId: 'parent',
+        dueWithTime: startOfToday + 3600000, timeEstimate: 3600000, timeSpent: 0,
+      };
+      mockSend
+        .mockResolvedValueOnce(mockResponse([proj]))
+        .mockResolvedValueOnce(mockResponse([tag]))
+        .mockResolvedValueOnce(mockResponse({ id: 'cur', title: 'Active', projectId: 'p1', tagIds: ['t1'], isDone: false, parentId: null }))
+        .mockResolvedValueOnce(mockResponse([subtask]))
+        .mockResolvedValueOnce(mockResponse([proj]))
+        .mockResolvedValueOnce(mockResponse([tag]))
+        .mockResolvedValueOnce(mockResponse([subtask]));
+      const result = await registeredResources['sp-context'](new URL('sp://context'));
+      const data = JSON.parse(result.contents[0].text);
+      expect(data.today.scheduled.map((t: { taskId: string }) => t.taskId)).toEqual(['child']);
+      expect(data.today.summary.scheduledCount).toBe(1);
+    });
   });
 });

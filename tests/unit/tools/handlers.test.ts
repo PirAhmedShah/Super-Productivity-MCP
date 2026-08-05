@@ -283,5 +283,66 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
       const msg = errMsg(await callTool('get_schedule', { start_date: '2026-08-05', end_date: '2026-08-04' }));
       expect(msg).toContain('must not be after');
     });
+
+    it('includes planned subtasks by default (container pattern)', async () => {
+      mockPlugin([
+        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+        task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+        task({ id: 'child2', title: 'Child B', parentId: 'parent1', dueWithTime: TODAY_MS + 10 * HOUR, timeEstimate: 2 * HOUR }),
+        task({ id: 'top1', title: 'Top level', dueWithTime: TODAY_MS + 12 * HOUR, timeEstimate: HOUR }),
+      ]);
+      const data = okData(await callTool('get_schedule'));
+      expect(data.scheduled.map((t: TaskFixture) => t.taskId)).toEqual(['child1', 'child2', 'top1']);
+      expect(data.summary.scheduledCount).toBe(3);
+      expect(data.summary.totalDurationMs).toBe(4 * HOUR);
+      expect(data.filteredSubtasks).toBeNull();
+    });
+
+    it('include_subtasks: false opts out and reports hidden subtasks', async () => {
+      mockPlugin([
+        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+        task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+        task({ id: 'top1', title: 'Top level', dueWithTime: TODAY_MS + 11 * HOUR, timeEstimate: HOUR }),
+      ]);
+      const data = okData(await callTool('get_schedule', { include_subtasks: false }));
+      expect(data.scheduled.map((t: TaskFixture) => t.taskId)).toEqual(['top1']);
+      expect(data.summary.scheduledCount).toBe(1);
+      expect(data.filteredSubtasks).toEqual({ count: 1, taskIds: ['child1'] });
+    });
+
+    it('overlap clusters include subtask conflicts by default', async () => {
+      mockPlugin([
+        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+        task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+        task({ id: 'child2', title: 'Child B', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR + 30 * 60 * 1000, timeEstimate: HOUR }),
+      ]);
+      const data = okData(await callTool('get_schedule'));
+      expect(data.overlaps).toHaveLength(1);
+      expect(data.overlaps[0].taskIds).toEqual(['child1', 'child2']);
+      expect(data.summary.overlapCount).toBe(1);
+      expect(data.summary.overlappingTaskCount).toBe(2);
+    });
+
+    it('container parents (0 estimate, unplanned) never double-count or fake-conflict', async () => {
+      mockPlugin([
+        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+        task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+      ]);
+      const data = okData(await callTool('get_schedule'));
+      expect(data.scheduled.map((t: TaskFixture) => t.taskId)).toEqual(['child1']);
+      expect(data.overlaps).toHaveLength(0);
+      expect(data.summary.scheduledCount).toBe(1);
+      expect(data.summary.totalDurationMs).toBe(HOUR);
+    });
+
+    it('done subtasks land in completedInRange with include_done', async () => {
+      mockPlugin([
+        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+        task({ id: 'child1', title: 'Child done', parentId: 'parent1', isDone: true, doneOn: TODAY_MS + 10 * HOUR, dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+      ]);
+      const data = okData(await callTool('get_schedule', { include_done: true }));
+      expect(data.completedInRange.map((t: TaskFixture) => t.taskId)).toEqual(['child1']);
+      expect(data.summary.completedCount).toBe(1);
+    });
   });
 });

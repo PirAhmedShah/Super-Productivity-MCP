@@ -122,7 +122,7 @@ export function registerResources(server: McpServer, dirs: ResolvedDirs): void {
       startDate: today,
       endDate: today,
       includeDone: true,
-      includeSubtasks: false,
+      includeSubtasks: true,
     });
     if (!view.ok) throw new Error(view.error ?? 'SP not responding');
 
