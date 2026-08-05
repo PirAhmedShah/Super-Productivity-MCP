@@ -139,6 +139,7 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 |------|-------------|
 | `create_task` | Create a task (supports SP short syntax) |
 | `create_task_with_subtasks` | Create a parent task + subtasks in one operation |
+| `batch_update_project` | Atomic multi-operation batch on one project (create/update/delete/reorder) in a single call — same-batch `temp_id` references resolve for parents and reorder (plugin ≥ 1.7.1); update/delete need real ids from `createdTaskIds` (see [Atomic batch operations](#atomic-batch-operations)) |
 | `get_tasks` | List tasks — filter by project, tag, done, archived, search (title+notes), `parents_only`, `overdue`, `unscheduled`, `planned_for_today`, `recurring_only`, `scheduled_on`, `completed_on`, `overlapping`, `sort_by`/`sort_dir`, `fields`, `include_schedule`. Full objects expose `plannedTime` (the effective planned timestamp, SP `dueWithTime`); `plannedAt` is a deprecated alias. Derived schedule fields (`startTime`, `endTime`, `startMs`, `endMs`, `durationMs`, `status`) are computable via `fields` or `include_schedule` |
 | `get_schedule` | Time-blocked view of a date range: tasks sized by `timeEstimate` (duration) and placed by `plannedTime` (start). Returns `scheduled` (with computed start/end/status), `overlaps` (conflict clusters), `unscheduledInRange`, `completedInRange`, and a `summary`. All items include resolved `projectTitle` + `tags` |
 | `get_task` | Fully-resolved single-task deep-dive: enriched names, derived schedule block, parent title, subtask list, and time spent over the last 14 days |
@@ -149,6 +150,11 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 | `stop_task` | Stop the currently running time tracker |
 | `add_time_today` | Add elapsed milliseconds to a task's today bucket — agent-driven time tracking (`timeSpentOnDay[today]`, which the worklog sums, plus `timeSpent`). Returns the updated task |
 | `get_current_task` | Get the currently tracked task (null if none) |
+| `select_task` | Open a task in SP's detail panel (works regardless of the active view) |
+| `get_selected_task` | The task currently open in SP's detail panel (null if none) |
+| `get_focused_task` | The task row currently focused in the UI (null if none) |
+| `get_active_work_context` | The project/tag/TODAY context the user is currently viewing |
+| `get_current_context_tasks` | The tasks currently rendered in the active work context |
 | `plan_tasks_for_today` | Batch plan/unplan tasks for today (pins to 00:00; `plan_from_now` plans at the current time) ⚠️ [limited](#known-limitations) |
 | `bulk_complete_tasks` | Mark multiple tasks complete in one operation |
 | `bulk_update_tasks` | Update multiple tasks in one operation |
@@ -168,6 +174,16 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 | `get_time` | Current machine date/time (local tz) — `epochMs`, `iso`, `localDate`, `localTime`, `dayOfWeek`, `timezone` |
 | `check_connection` | Verify SP is running and the plugin is responding (also returns `serverNow`) |
 | `debug_directories` | Show resolved data directory paths |
+| `get_app_state` | Read-only full snapshot of SP state (tasks, projects, tags, notes, repeat configs, counters, global config) — optionally written to a JSON file via `output_path` |
+| `get_notes` | List all SP notes |
+| `get_plugin_config` | The plugin's optional configuration (usually `null`) |
+| `reinit_data` | Tell SP to reload its persisted data from disk |
+| `get_counter` | Read a simple counter (null if it doesn't exist) |
+| `set_counter` | Set a simple counter to an absolute value |
+| `increment_counter` | Increment a simple counter (creates it at 0 first) |
+| `decrement_counter` | Decrement a simple counter (creates it at 0 first) |
+| `delete_counter` | Delete a simple counter |
+| `get_all_counters` | Return all simple counters as `{ id: value }` |
 
 ## Resources
 
@@ -187,6 +203,15 @@ SP stores tasks with opaque `projectId` / `tagIds` UUIDs. To save the agent from
 - `tags` — `[{ id, title, color }]` for each of the task's tags
 
 Project/tag lookups are cached server-side (30s TTL) and invalidated automatically on `create/update_tag` and `create/update_project`, so writes are reflected immediately. Unknown references degrade gracefully (resolve to `null` / are omitted). `get_tasks { fields: [...] }` also accepts `projectTitle` and `tags` as selectable fields.
+
+## Atomic batch operations
+
+`batch_update_project` applies create/update/delete/reorder operations to one project in a single call:
+
+- **Same-batch references (plugin ≥ 1.7.1):** give new tasks a `temp_id` and later operations in the *same* call may use it as `parent_id` (subtask under a freshly-created parent), inside `reorder` `task_ids`, or in `sub_task_ids` — the plugin resolves temp ids itself before dispatching to SP.
+- **Real ids still required for update/delete:** to update or delete a task you just created in the same batch, run a second call using its real id from the first call's `createdTaskIds` (two-phase pattern).
+- **Stale plugin (< 1.7.1):** same-batch temp references are silently dropped (subtasks never persist, temp-id reorders no-op). Re-upload `plugin.zip` — see [Troubleshooting](#troubleshooting).
+- On partial failure SP drops skipped operations silently (logged server-side), so verify the result.
 
 ## SP Short Syntax
 
@@ -208,6 +233,8 @@ Include these in task titles and they are parsed automatically:
 - **SP 18.10.0–18.12.x hard block:** update to SP ≥ 18.13.0. After re-uploading the plugin, accept the Node execution consent dialog that appears on first enable.
 
 **Commands timing out?** Ask *"Show debug info for Super Productivity"* to check that both sides are using the same data directory. Mac App Store users may need to set `SP_MCP_DATA_DIR`.
+
+**Stale plugin?** If task titles get mangled after plugin writes (date-like `@tokens` stripped, due dates clobbered) or batch operations silently drop subtasks / ignore reorders, the deployed plugin is older than 1.7.0 / 1.7.1. Re-download `plugin.zip` from the [latest release](https://github.com/PirAhmedShah/Super-Productivity-MCP/releases/latest) and re-upload it in Settings → Plugins.
 
 → [Full troubleshooting guide](docs/troubleshooting.md)
 

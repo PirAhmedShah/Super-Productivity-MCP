@@ -74,3 +74,14 @@ This occurs on plugin versions ≤ 1.1.1 when SP's plugin sandbox doesn't expose
 ## Version Mismatch
 
 The MCP server and SP plugin must be on the same version. After updating one, always update the other. To check which versions are running, ask your AI assistant: *"Check the Super Productivity connection"*
+
+## Stale Plugin Symptoms
+
+Two bugs were fixed in recent plugin versions but *look* like app behavior if you're on an older `plugin.zip`:
+
+| Symptom | Fixed in | Remedy |
+|---------|----------|--------|
+| Task titles mangled after plugin writes: date-like `@tokens` (`@date`, `@tomorrow`, month names…) stripped or due dates clobbered | 1.7.0 (SP 18.16 chrono re-parses plugin titles) | Re-upload plugin.zip |
+| `batch_update_project` silently drops subtasks created under a same-batch parent, or reorders with temp ids no-op | 1.7.1 (plugin resolves temp refs itself) | Re-upload plugin.zip |
+
+To check the deployed version, ask *"Check the Super Productivity connection"* — `pluginVersion` in the response. Then re-download `plugin.zip` from the [latest release](https://github.com/PirAhmedShah/Super-Productivity-MCP/releases/latest) and upload it in **Settings → Plugins**.

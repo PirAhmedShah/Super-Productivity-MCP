@@ -34,6 +34,24 @@ Parses tag, due date, and time estimate from short syntax — one shot, no follo
 
 > "Create a parent task 'Q3 OKRs' with subtasks for each team goal"
 
+## Atomic Batch Operations
+
+> "Set up next week: create a parent task 'Sprint 13' with 4 subtasks, then order them by priority"
+
+One `batch_update_project` call — the subtasks reference the parent's `temp_id`, and the reorder references the created tasks, all resolved in the same call (plugin ≥ 1.7.1).
+
+> "In my Work project: create 'Draft proposal', rename it to 'Draft proposal v2', and schedule a review task under it"
+
+If you need to update or delete something you just created, use its real id from the first call's `createdTaskIds` in a second (two-phase) call.
+
+## Counters
+
+> "How many coffees today? Bump the counter by 1"
+
+> "Show me all counters"
+
+> "Reset my standing-desk counter to 0"
+
 ## Time Tracking
 
 > "Start tracking 'Write API docs'"
