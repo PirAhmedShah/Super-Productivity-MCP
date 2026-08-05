@@ -67,10 +67,6 @@ Common values:
 
 > **Note:** On Linux, if `~/.local/share` is not writable (e.g. Fedora with restrictive permissions or Flatpak sandboxing), the plugin and server will automatically fall back to `/tmp/super-productivity-mcp`. This directory may be cleared on reboot but works without any configuration.
 
-## `ReferenceError: process is not defined`
-
-This occurs on plugin versions ≤ 1.1.1 when SP's plugin sandbox doesn't expose the Node.js `process` global. Update to version 1.2.0+ which guards against this. If you installed the plugin manually, re-download `plugin.zip` from the [latest release](https://github.com/PirAhmedShah/Super-Productivity-MCP/releases/latest).
-
 ## Version Mismatch
 
 The MCP server and SP plugin must be on the same version. After updating one, always update the other. To check which versions are running, ask your AI assistant: *"Check the Super Productivity connection"*

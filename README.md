@@ -155,7 +155,7 @@ The plugin to upload to Super Productivity is at `dist/plugin.zip` after `npm ru
 | `get_focused_task` | The task row currently focused in the UI (null if none) |
 | `get_active_work_context` | The project/tag/TODAY context the user is currently viewing |
 | `get_current_context_tasks` | The tasks currently rendered in the active work context |
-| `plan_tasks_for_today` | Batch plan/unplan tasks for today (pins to 00:00; `plan_from_now` plans at the current time) ⚠️ [limited](#known-limitations) |
+| `plan_tasks_for_today` | Batch plan/unplan tasks for today (pins to 00:00; `plan_from_now` plans at the current time) |
 | `bulk_complete_tasks` | Mark multiple tasks complete in one operation |
 | `bulk_update_tasks` | Update multiple tasks in one operation |
 | `add_tag_to_task` | Add a tag without replacing other tags |
@@ -234,12 +234,6 @@ Include these in task titles and they are parsed automatically:
 **Stale plugin?** If tasks behave oddly after plugin writes (mangled titles, dropped subtasks, ignored reorders), the deployed `plugin.zip` is older than the latest release. Re-download it and re-upload in Settings → Plugins.
 
 → [Full troubleshooting guide](docs/troubleshooting.md)
-
-## Known Limitations
-
-| Tool | Issue | Status |
-|------|-------|--------|
-| `plan_tasks_for_today` | Sets `dueWithTime` on the task but does not add it to SP's internal Planner store, so the task may not appear in the Today view. | Upstream request: [super-productivity#7495](https://github.com/super-productivity/super-productivity/issues/7495) |
 
 ## Scheduling semantics (planned time)
 

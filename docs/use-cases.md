@@ -38,7 +38,7 @@ Parses tag, due date, and time estimate from short syntax — one shot, no follo
 
 > "Set up next week: create a parent task 'Sprint 13' with 4 subtasks, then order them by priority"
 
-One `batch_update_project` call — the subtasks reference the parent's `temp_id`, and the reorder references the created tasks, all resolved in the same call (plugin ≥ 1.7.1).
+One `batch_update_project` call — the subtasks reference the parent's `temp_id`, and the reorder references the created tasks, all resolved in the same call.
 
 > "In my Work project: create 'Draft proposal', rename it to 'Draft proposal v2', and schedule a review task under it"
 
