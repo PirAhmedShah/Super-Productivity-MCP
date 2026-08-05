@@ -9,12 +9,12 @@ import { errorResult, okResult } from './result.js';
 
 const batchCreateSchema = z.object({
   type: z.literal('create'),
-  temp_id: z.string().describe('Temporary ID of your choice; later operations reference it (as parent_id or in reorder task_ids)'),
+  temp_id: z.string().describe('Temporary ID of your choice; echoed back in createdTaskIds. Same-batch temp ids resolve for parent_id/reorder (plugin >= 1.7.1 resolves them itself; stale plugins silently drop them — then use the two-phase pattern)'),
   data: z.object({
     title: z.string().describe('Task title'),
     notes: z.string().optional(),
     is_done: z.boolean().optional(),
-    parent_id: z.string().nullable().optional().describe('Parent task ID or a temp_id from another create op'),
+    parent_id: z.string().nullable().optional().describe('Parent task ID, or a temp_id from a create op in the same batch (resolved plugin-side, plugin >= 1.7.1). On a stale plugin a same-batch temp parent_id silently drops the subtask — then create the parent first and use its real id'),
     time_estimate: z.number().int().nonnegative().optional().describe('Time estimate in ms'),
   }),
 });
@@ -39,7 +39,7 @@ const batchDeleteSchema = z.object({
 
 const batchReorderSchema = z.object({
   type: z.literal('reorder'),
-  task_ids: z.array(z.string()).describe('Complete ordered list of task IDs (may include temp_ids of created tasks)'),
+  task_ids: z.array(z.string()).describe('Complete ordered list of task IDs (may include temp_ids of same-batch creates — resolved plugin-side, plugin >= 1.7.1; stale plugins no-op on temp ids)'),
 });
 
 const batchOperationSchema = z.discriminatedUnion('type', [
@@ -84,10 +84,10 @@ export function registerBatchTools(server: McpServer, dirs: ResolvedDirs): void 
     'batch_update_project',
     {
       description:
-        'Apply atomic multi-operation changes to one project in Super Productivity in a single transaction (create/update/delete/reorder). Unlike bulk_update_tasks (plain per-task updates), this supports references: give new tasks a temp_id and later ops in the SAME call may use it as parent_id or inside reorder task_ids / sub_task_ids. IMPORTANT (SP limitation): update and delete ops only resolve REAL task IDs — to update/delete a task you just created in this batch, run a second call and pass its id from this call\'s createdTaskIds. On partial failure SP drops skipped ops silently (logged server-side), so verify the result.',
+        'Apply atomic multi-operation changes to one project in Super Productivity in a single transaction (create/update/delete/reorder). Unlike bulk_update_tasks (plain per-task updates), this supports references: give new tasks a temp_id and later ops in the SAME call may use it as parent_id, inside reorder task_ids, or in sub_task_ids (plugin >= 1.7.1 resolves temp ids itself before dispatching). update and delete ops still need REAL task IDs — to update/delete a task you just created in this batch, run a second call with its id from this call\'s createdTaskIds (two-phase). Known issue: a stale plugin (< 1.7.1) silently drops same-batch temp references — same-batch create-with-temp-parent_id fails to persist and temp-id reorders no-op. On partial failure SP drops skipped ops silently (logged server-side), so verify the result.',
       inputSchema: {
         project_id: z.string().describe('Project ID to apply the operations to'),
-        operations: z.array(batchOperationSchema).min(1).describe('Operations to apply, in order. temp_id/tempIds resolve only for create-parent/reorder/subTaskIds; update/delete need real ids (two-phase pattern).'),
+        operations: z.array(batchOperationSchema).min(1).describe('Operations to apply, in order. temp_id/tempIds resolve for create-parent/reorder/subTaskIds (plugin >= 1.7.1); update/delete need real ids (two-phase pattern).'),
       },
     },
     async ({ project_id, operations }) => {

@@ -1,6 +1,6 @@
 // MCP Bridge Plugin for Super Productivity
 // Keep PLUGIN_VERSION in sync with manifest.json "version".
-const PLUGIN_VERSION = '1.7.0';
+const PLUGIN_VERSION = '1.7.1';
 const PROTOCOL_VERSION = 1;
 const POLL_INTERVAL_MS = 2000;
 let commandDir = null;
@@ -99,7 +99,7 @@ function parseAtDateSyntax(title, now = new Date()) {
   return { dueDay, dueWithTime, cleanTitle };
 }
 
-// SP 18.16+ runs its own short-syntax parser (chrono, see ShortSyntaxEffects) on the titles of
+// SP 18.16 runs its own short-syntax parser (chrono, see ShortSyntaxEffects) on the titles of
 // plugin-created/updated tasks — the plugin bridge cannot disable it (PluginCreateTaskData has
 // no isIgnoreShortSyntax, and typia.assert rejects unknown fields). A leftover date-like @token
 // that parseAtDateSyntax intentionally keeps in cleanTitle (e.g. a literal "@date") would get
@@ -111,8 +111,78 @@ function stripResidualDateTokens(rawTitle) {
   return rawTitle.replace(RE, ' ').replace(/\s+/g, ' ').trim();
 }
 
+// Batch temp-id resolution (verified 2026-08-05 on SP 18.16.0 / plugin 1.7.0): the plugin bridge
+// loses same-batch temp_id references — a create with data.parentId = a temp_id from the same
+// batch is silently dropped (createdTaskIds reports an id that never persists), and reorder
+// task_ids containing temp ids silently no-op. SP's own reducer resolves them, so resolve
+// plugin-side instead: creates run first (parents before children, multi-level chains handled),
+// then the remaining ops are rewritten with the real ids from each pass' createdTaskIds.
+function isDeclaredTempId(id, declaredTempIds) {
+  return typeof id === 'string' && declaredTempIds.includes(id);
+}
+
+function rewriteBatchOp(op, tempToReal, declaredTempIds) {
+  const real = (id) => (isDeclaredTempId(id, declaredTempIds) ? tempToReal[id] || id : id);
+  switch (op.type) {
+    case 'create': {
+      const data = { ...op.data };
+      if (data.parentId) data.parentId = real(data.parentId);
+      return { ...op, data };
+    }
+    case 'update': {
+      const updates = { ...op.updates };
+      if (updates.parentId !== undefined) updates.parentId = real(updates.parentId);
+      if (Array.isArray(updates.subTaskIds)) updates.subTaskIds = updates.subTaskIds.map(real);
+      return { type: 'update', taskId: real(op.taskId), updates };
+    }
+    case 'delete':
+      return { type: 'delete', taskId: real(op.taskId) };
+    case 'reorder':
+      return { type: 'reorder', taskIds: op.taskIds.map(real) };
+    default:
+      return op;
+  }
+}
+
+async function runBatchUpdateForProject(api, data) {
+  const ops = Array.isArray(data.operations) ? data.operations : [];
+  const creates = ops.filter((o) => o && o.type === 'create');
+  const rest = ops.filter((o) => o && o.type !== 'create');
+  const declaredTempIds = creates.map((c) => c.tempId);
+  const tempToReal = {};
+  const errors = [];
+  const merged = { success: true, createdTaskIds: tempToReal, errors };
+  let blocked = creates;
+  for (let guard = 0; blocked.length && guard < 20; guard++) {
+    const resolvable = [];
+    const stillBlocked = [];
+    for (const c of blocked) {
+      const pid = c.data && c.data.parentId;
+      if (!pid || !isDeclaredTempId(pid, declaredTempIds) || tempToReal[pid]) resolvable.push(c);
+      else stillBlocked.push(c);
+    }
+    if (!resolvable.length) {
+      for (const c of blocked) errors.push({ op: c.type, tempId: c.tempId, error: `Unresolvable temp parent_id ${c.data && c.data.parentId}` });
+      break;
+    }
+    const res = await api.batchUpdateForProject({ projectId: data.projectId, operations: resolvable.map((o) => rewriteBatchOp(o, tempToReal, declaredTempIds)) });
+    if (res && res.createdTaskIds) Object.assign(tempToReal, res.createdTaskIds);
+    if (res && Array.isArray(res.errors) && res.errors.length) errors.push(...res.errors);
+    if (res && res.success === false) merged.success = false;
+    blocked = stillBlocked;
+  }
+  const finalOps = rest.map((o) => rewriteBatchOp(o, tempToReal, declaredTempIds));
+  if (finalOps.length) {
+    const res = await api.batchUpdateForProject({ projectId: data.projectId, operations: finalOps });
+    if (res && res.createdTaskIds) Object.assign(merged.createdTaskIds, res.createdTaskIds);
+    if (res && Array.isArray(res.errors)) merged.errors.push(...res.errors);
+    if (res && res.success === false) merged.success = false;
+  }
+  return merged;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseAtDateSyntax, stripResidualDateTokens };
+  module.exports = { parseAtDateSyntax, stripResidualDateTokens, runBatchUpdateForProject, rewriteBatchOp };
 }
 
 async function setupDirectories() {
@@ -584,7 +654,8 @@ async function executeCommand(command) {
       case 'batchUpdateForProject': {
         // Atomic multi-op write for one project (SP 18.x): create/update/delete/reorder in a
         // single transaction. tempId can be referenced by later operations (parents, reorder).
-        result = await PluginAPI.batchUpdateForProject(command.data || {});
+        // SP 18.16's bridge loses same-batch temp refs, so resolve them here first.
+        result = await runBatchUpdateForProject(PluginAPI, command.data || {});
         break;
       }
       case 'getActiveWorkContext': {
