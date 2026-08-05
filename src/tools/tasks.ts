@@ -354,10 +354,14 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         planned_at: z.number().nullable().optional().describe('DEPRECATED: alias of due_with_time (both map to SP dueWithTime; the legacy plannedAt field is obsolete). Prefer due_with_time.'),
         time_estimate: z.number().optional().describe('Time estimate in milliseconds'),
         time_spent: z.number().optional().describe('Time spent in milliseconds'),
+        time_spent_on_day: z
+          .record(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD'), z.number().int().nonnegative().describe('ms'))
+          .optional()
+          .describe('Merge these per-day values into the timeSpentOnDay bucket (corrections; dates not listed are untouched; total timeSpent is recomputed as the bucket sum unless time_spent is also given)'),
         tag_ids: z.array(z.string()).optional().describe('Bulk-replace all tags with this list (FR-003)'),
       },
     },
-    async ({ task_id, title, notes, is_done, due_day, due_with_time, planned_at, time_estimate, time_spent, tag_ids }) => {
+    async ({ task_id, title, notes, is_done, due_day, due_with_time, planned_at, time_estimate, time_spent, time_spent_on_day, tag_ids }) => {
       if (!task_id?.trim()) return errorResult('task_id is required');
 
       const data: Record<string, unknown> = {};
@@ -372,6 +376,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
       if (planned !== undefined) data.dueWithTime = planned;
       if (time_estimate !== undefined) data.timeEstimate = time_estimate;
       if (time_spent !== undefined) data.timeSpent = time_spent;
+      if (time_spent_on_day !== undefined) data.time_spent_on_day = time_spent_on_day;
       // tag_ids replaces the entire tag list; use add_tag_to_task / remove_tag_from_task for incremental changes
       if (tag_ids !== undefined) data.tagIds = tag_ids;
 
@@ -482,15 +487,15 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
     },
   );
 
-  // add_time_today (agent-driven time tracking — add elapsed ms to a task's today bucket)
-  // SP's live ticker can't be driven reliably from a plugin (window throttling), so the agent
-  // keeps its own wall-clock timer and writes the result here. The worklog sums timeSpentOnDay,
-  // so we must update that field (and timeSpent) — NOT just timeSpent.
+  // add_time_today (fallback/correction — plugin ≥1.7.2 drives SP's real timer natively)
+  // Keep for retroactive accrual (work done before 1.7.2) and under-accrual from a
+  // backgrounded window. The worklog sums timeSpentOnDay, so we must update that field
+  // (and timeSpent) — NOT just timeSpent.
   server.registerTool(
     'add_time_today',
     {
       description:
-        'Add elapsed milliseconds to a task for today. Use for agent-driven time tracking: the agent records its own start time, then on completion or at end-of-day calls this to write the elapsed time into the task. Updates both the per-day bucket (timeSpentOnDay[today], which the worklog reads) and the total timeSpent. Returns the updated task.',
+        'Add elapsed milliseconds to a task for today. Fallback/correction tool: since plugin 1.7.2, start_task/stop_task drive SP\'s real timer and SP accrues timeSpentOnDay[today] natively; use this only for retroactive time or under-accrual from a backgrounded window. Updates both the per-day bucket (timeSpentOnDay[today], which the worklog reads) and the total timeSpent. Returns the updated task.',
       inputSchema: {
         task_id: z.string().describe('Task ID to add time to'),
         ms: z.number().int().nonnegative().describe('Elapsed milliseconds to add'),

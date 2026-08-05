@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions align with the SP plugin manifest and the npm package.
 
+## [1.7.3] — 2026-08-05
+
+### Added
+- **`update_task` accepts `time_spent_on_day`** — a `{ 'YYYY-MM-DD': ms }` map that merges into the task's per-day bucket (`timeSpentOnDay`, what the worklog sums). Dates not listed are untouched, so it corrects both directions without negative values. `timeSpent` is recomputed as the bucket sum unless `time_spent` is also given. Before this, an over-accrued day was unfixable: `update_task { time_spent }` only zeroed the total and `add_time_today` rejects negative ms. Implemented plugin-side mirroring the `addTimeToday` write path (verified working in production); the merge helper is exported for unit tests (5 new tests).
+
 ## [1.7.2] — 2026-08-05
 
 ### Fixed

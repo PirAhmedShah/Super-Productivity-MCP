@@ -1,6 +1,6 @@
 // MCP Bridge Plugin for Super Productivity
 // Keep PLUGIN_VERSION in sync with manifest.json "version".
-const PLUGIN_VERSION = '1.7.2';
+const PLUGIN_VERSION = '1.7.3';
 const PROTOCOL_VERSION = 1;
 const POLL_INTERVAL_MS = 2000;
 let commandDir = null;
@@ -111,6 +111,24 @@ function stripResidualDateTokens(rawTitle) {
   return rawTitle.replace(RE, ' ').replace(/\s+/g, ' ').trim();
 }
 
+// Merge a { 'YYYY-MM-DD': ms } patch into a task's per-day bucket. Returns null when the patch
+// is invalid (non-finite or negative ms). The total (timeSpent) is recomputed as the bucket sum
+// unless the caller explicitly overrides it. Keeps the addTimeToday invariant: the worklog sums
+// timeSpentOnDay, so the totals must move with the bucket.
+function mergeTimeSpentOnDay(existing, patch, explicitTotal) {
+  if (patch === null || typeof patch !== 'object') return null;
+  const bucket = Object.assign({}, existing || {});
+  for (const [date, ms] of Object.entries(patch)) {
+    if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return null;
+    bucket[date] = ms;
+  }
+  return {
+    timeSpentOnDay: bucket,
+    timeSpent: explicitTotal !== undefined ? explicitTotal : Object.values(bucket).reduce((a, b) => a + b, 0),
+  };
+}
+
+
 // Batch temp-id resolution (verified 2026-08-05 on SP 18.16.0 / plugin 1.7.0): the plugin bridge
 // loses same-batch temp_id references — a create with data.parentId = a temp_id from the same
 // batch is silently dropped (createdTaskIds reports an id that never persists), and reorder
@@ -182,7 +200,7 @@ async function runBatchUpdateForProject(api, data) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseAtDateSyntax, stripResidualDateTokens, runBatchUpdateForProject, rewriteBatchOp };
+  module.exports = { parseAtDateSyntax, stripResidualDateTokens, mergeTimeSpentOnDay, runBatchUpdateForProject, rewriteBatchOp };
 }
 
 async function setupDirectories() {
@@ -385,6 +403,24 @@ async function executeCommand(command) {
         // Title-only updates re-run SP's short-syntax parser (SP 18.16+), so scrub residual
         // date-like @tokens the same way as on create.
         if (updateData.title) updateData.title = stripResidualDateTokens(updateData.title);
+        // time_spent_on_day: merge a { 'YYYY-MM-DD': ms } map into the existing per-day bucket
+        // (corrections; dates not listed are untouched). timeSpent is recomputed as the bucket
+        // sum unless the caller explicitly set it, mirroring addTimeToday's accounting invariant
+        // (the worklog sums timeSpentOnDay, so writing timeSpent alone would drift the totals).
+        if ('time_spent_on_day' in updateData) {
+          const allTasksForBucket = await PluginAPI.getTasks();
+          const taskForBucket = allTasksForBucket.find(t => t.id === command.taskId);
+          if (!taskForBucket) {
+            return { success: false, error: `Task not found: ${command.taskId}`, timestamp: Date.now() };
+          }
+          const merged = mergeTimeSpentOnDay(taskForBucket.timeSpentOnDay, updateData.time_spent_on_day, updateData.timeSpent);
+          if (!merged) {
+            return { success: false, error: 'Invalid time_spent_on_day: values must be non-negative numbers', timestamp: Date.now() };
+          }
+          delete updateData.time_spent_on_day;
+          delete updateData.timeSpent;
+          Object.assign(updateData, merged);
+        }
         // SP auto-sets the planned time (dueWithTime) when dueDay changes. Preserve existing
         // value unless the caller explicitly included dueWithTime in the update.
         if ('dueDay' in updateData && !('dueWithTime' in updateData)) {
