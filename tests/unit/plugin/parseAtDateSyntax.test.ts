@@ -96,9 +96,8 @@ describe('parseAtDateSyntax', () => {
     expect(parseAtDateSyntax('d @today 9:30pm', NOW).dueWithTime).toBe(new Date(2026, 6, 15, 21, 30, 0).getTime());
   });
 
-  // Regression: https://github.com/b0x42/Super-Productivity-MCP/issues/78
-  // "@today 6h/11h" previously ate the leading digit of the duration syntax,
-  // corrupting the title to "test task2 h/11h".
+  // Regression (#78): "@today 6h/11h" previously ate the leading digit of the
+  // duration syntax, corrupting the title to "test task2 h/11h".
   it('does not eat a leading digit from adjacent duration syntax (#78)', () => {
     expect(parseAtDateSyntax('test task2 @today 6h/11h', NOW)).toEqual({
       dueDay: '2026-07-15',

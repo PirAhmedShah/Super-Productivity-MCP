@@ -33,7 +33,7 @@ await server.connect(transport);
 
 **Decision**: JSON files in shared directories with polling. Command files written by server, read/deleted by plugin. Response files written by plugin, read/deleted by server.
 
-**Rationale**: Proven by the reference SP-MCP project. The SP plugin sandbox only allows filesystem access via `PluginAPI.executeNodeScript`. No sockets, no HTTP, no shared memory available.
+**Rationale**: Proven by the original SP-MCP project. The SP plugin sandbox only allows filesystem access via `PluginAPI.executeNodeScript`. No sockets, no HTTP, no shared memory available.
 
 **Alternatives considered**:
 - WebSocket: Not available in SP plugin sandbox.

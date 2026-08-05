@@ -3,7 +3,7 @@
 **Feature Branch**: `001-sp-mcp-server`
 **Created**: 2026-04-20
 **Status**: Draft
-**Input**: User description: "Build an MCP Server for Super Productivity based on the reference SP-MCP project. Must integrate into Super Productivity as a plugin. Improve upon the unmaintained reference by addressing its open issues and PRs."
+**Input**: User description: "Build an MCP Server for Super Productivity based on the original SP-MCP project. Must integrate into Super Productivity as a plugin. Improve upon the unmaintained original by addressing its open issues and PRs."
 
 ## Clarifications
 

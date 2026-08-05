@@ -69,7 +69,7 @@ Common values:
 
 ## `ReferenceError: process is not defined`
 
-This occurs on plugin versions ≤ 1.1.1 when SP's plugin sandbox doesn't expose the Node.js `process` global. Update to version 1.2.0+ which guards against this. If you installed the plugin manually, re-download `plugin.zip` from the [latest release](https://github.com/b0x42/Super-Productivity-MCP/releases/latest).
+This occurs on plugin versions ≤ 1.1.1 when SP's plugin sandbox doesn't expose the Node.js `process` global. Update to version 1.2.0+ which guards against this. If you installed the plugin manually, re-download `plugin.zip` from the [latest release](https://github.com/PirAhmedShah/Super-Productivity-MCP/releases/latest).
 
 ## Version Mismatch
 
