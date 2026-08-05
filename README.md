@@ -14,7 +14,7 @@ This project is a fork of [b0x42/Super-Productivity-MCP](https://github.com/b0x4
 
 The author runs his day through an AI assistant: read the schedule in the morning, plan tasks into time blocks, reschedule when the day slips, close out with a review. That loop kept tripping on upstream. Long daily planning sessions, rescheduling mid-day, and managing the schedule itself all required operations upstream did not expose. The fork adds what the agent needed:
 
-- `get_schedule`: time-blocked day view with overlap detection, tasks due but unscheduled, and completed work
+- `get_schedule`: time-blocked day view with overlap detection, tasks due but unscheduled, and completed work (subtasks included by default)
 - `plan_tasks_for_today` and exact planned times (`due_with_time`): batch a morning plan, or pin a task to a specific clock time
 - `sp://context`: one fetch that bootstraps a session (server time, projects, tags, today's schedule, current task)
 - real time tracking: `start_task` / `stop_task` drive SP's built-in timer, per-day time buckets, `get_worklog`
@@ -22,7 +22,7 @@ The author runs his day through an AI assistant: read the schedule in the mornin
 - context and state: active view, selected task, `get_app_state` snapshot, counters, notes
 - enrichment on every response: resolved `projectTitle` and tags
 
-The fork also commits to one supported target: Super Productivity 18.16.0 and newer. No fallback paths for older versions, 235 passing tests, and every behavior is verified live against 18.16.0. Upstream stays the light option for pure capture; this fork is for running the day.
+The fork also commits to one supported target: Super Productivity 18.16.0 and newer. No fallback paths for older versions, 259 passing tests, and every behavior is verified live against 18.16.0. Upstream stays the light option for pure capture; this fork is for running the day.
 
 ## First-time setup, step by step
 
@@ -226,7 +226,7 @@ See [more use cases](docs/use-cases.md).
 
 | Resource | Description |
 |----------|-------------|
-| `sp://context` | **One-fetch session bootstrap**: server time, projects, tags, today's schedule (with overlaps + completed), overdue tasks, and the currently tracked task. All names resolved |
+| `sp://context` | **One-fetch session bootstrap**: server time, projects, tags, today's schedule (subtasks included by default, with overlaps + completed), overdue tasks, and the currently tracked task. All names resolved |
 | `sp://projects` | All projects with IDs and colors |
 | `sp://tags` | All tags with IDs, colors, and icons |
 | `sp://tasks/today` | Today's planned tasks (names resolved) |
@@ -277,6 +277,7 @@ See the [full troubleshooting guide](docs/troubleshooting.md).
 - A task's planned/start time lives in SP's `dueWithTime` field, exposed as `plannedTime` in responses.
 - A task's **size** is its `timeEstimate` (duration) and its **start** is its planned time. `get_schedule` combines the two into a timeline: `startMs = plannedTime`, `endMs = startMs + timeEstimate`.
 - `get_schedule` reports **overlap conflict clusters**: transitively-connected groups of tasks whose scheduled windows intersect. Only open tasks with both a planned time and a positive estimate participate; intervals that merely touch at a boundary are not overlaps. `get_tasks { overlapping: true }` returns just the tasks involved in a conflict. Completed tasks land in `completedInRange` only, never double-listed in `scheduled` (with `include_done`), so the summary counts stay consistent.
+- `get_schedule` **includes subtasks by default**, matching SP's own Today/Schedule view — container parents (zero estimate, unplanned) are pure grouping and never show up as blocks or fake conflicts. Pass `include_subtasks: false` for a top-level-only view; the response then reports what was hidden via `filteredSubtasks: { count, taskIds }`, so no filtering is ever silent. `sp://context` applies the same include-subtasks default to its `today` block.
 - Derived per-task `status`: `done` → `unsized` (no planned time) → `past` (now ≥ end) → `in-progress` (now ≥ start) → `upcoming`.
 - Get the current wall clock with `get_time` (or `check_connection.serverNow`). `epochMs` is ready for scheduling; do not shell out to `date`.
 - **Time tracking:** `start_task` / `stop_task` drive SP's real timer. The plugin dispatches the whitelisted NgRx action `[Task] SetCurrentTask` (`{ id }` to start, `{ id: null }` to stop), so the UI shows the ticking timer and SP accrues `timeSpentOnDay[today]` natively (what `get_worklog` sums). `add_time_today { task_id, ms }` remains as a fallback/correction (retroactive accrual, backgrounded-window under-accrual), and `update_task { time_spent_on_day: { 'YYYY-MM-DD': ms } }` corrects the per-day bucket itself (merge semantics; `timeSpent` follows as the bucket sum).
