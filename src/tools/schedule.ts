@@ -21,7 +21,19 @@ export interface SchedulableTask {
   timeEstimate?: number;
   timeSpent?: number;
   doneOn?: number | null;
+  subTaskIds?: string[];
   [key: string]: unknown;
+}
+
+/**
+ * A container: a parent task with subtasks. Containers are pure grouping
+ * structures — they never schedule as their own block and never participate in
+ * overlap/conflict detection, regardless of their plannedTime or timeEstimate
+ * (SP core re-aggregates parent timeEstimate as the sum of child estimates,
+ * so an estimate on a parent is a derived artifact, not a plan signal).
+ */
+export function isContainer(t: SchedulableTask): boolean {
+  return Array.isArray(t.subTaskIds) && t.subTaskIds.length > 0;
 }
 
 /** Compute local YYYY-MM-DD date string (not UTC — spec requires local timezone boundary). */
@@ -80,10 +92,15 @@ function fmtTime(ms: number): string {
 /**
  * Derive a task's schedule block: start = plannedTime, end = start + timeEstimate (only when
  * the estimate is positive — unknown duration can't be sized), plus a planner-friendly status.
+ * Containers (parents with subtasks) never carry a duration: their timeEstimate is an
+ * SP-derived aggregate of the children, so hasDuration is always false for them.
  */
 export function deriveSchedule(t: SchedulableTask, now: number): ScheduleBlock {
   const startMs = plannedTimeOf(t);
-  const est = typeof t.timeEstimate === 'number' && t.timeEstimate > 0 ? t.timeEstimate : null;
+  const est =
+    !isContainer(t) && typeof t.timeEstimate === 'number' && t.timeEstimate > 0
+      ? t.timeEstimate
+      : null;
   const endMs = startMs != null && est != null ? startMs + est : null;
   let status: ScheduleStatus;
   if (t.isDone) status = 'done';
@@ -207,7 +224,9 @@ export async function buildScheduleView(dirs: ResolvedDirs, opts: ScheduleViewOp
     const start = plannedTimeOf(t);
     if (start != null) {
       const startDay = localDateStr(new Date(start));
-      if (startDay >= startDate && startDay <= endDate) scheduled.push(scheduleItem(t, now));
+      if (startDay >= startDate && startDay <= endDate && !isContainer(t)) {
+        scheduled.push(scheduleItem(t, now));
+      }
     } else if (t.dueDay && t.dueDay >= startDate && t.dueDay <= endDate) {
       unscheduledInRange.push(scheduleItem(t, now));
     }

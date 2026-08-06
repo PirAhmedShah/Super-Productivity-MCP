@@ -50,11 +50,21 @@ function mockResponse(result: unknown): Response {
 
 // Drive the plugin side: getTasks returns ALL fixtures (server-side filtering is the
 // source of truth in this codebase), and getAllProjects/getAllTags feed enrichment.
+// bulkUpdateTasks applies its data merges to the fixtures (like SP's reducer), so
+// follow-up reads observe the writes.
 function mockPlugin(tasks: TaskFixture[]): void {
-  mockSend.mockImplementation(async (_d: ResolvedDirs, action: string) => {
+  mockSend.mockImplementation(async (_d: ResolvedDirs, action: string, fields?: Record<string, unknown>) => {
     if (action === 'getAllProjects') return mockResponse(PROJECTS);
     if (action === 'getAllTags') return mockResponse(TAGS);
     if (action === 'getTasks') return mockResponse(tasks);
+    if (action === 'bulkUpdateTasks') {
+      const updates = (fields?.updates ?? []) as { taskId: string; data: Record<string, unknown> }[];
+      for (const u of updates) {
+        const t = tasks.find(t => t.id === u.taskId);
+        if (t) Object.assign(t, u.data);
+      }
+      return mockResponse({ results: updates.map(u => ({ id: u.taskId, success: true })) });
+    }
     return mockResponse(null);
   });
 }
@@ -286,7 +296,7 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
 
     it('includes planned subtasks by default (container pattern)', async () => {
       mockPlugin([
-        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null, subTaskIds: ['child1', 'child2'] }),
         task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
         task({ id: 'child2', title: 'Child B', parentId: 'parent1', dueWithTime: TODAY_MS + 10 * HOUR, timeEstimate: 2 * HOUR }),
         task({ id: 'top1', title: 'Top level', dueWithTime: TODAY_MS + 12 * HOUR, timeEstimate: HOUR }),
@@ -300,7 +310,7 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
 
     it('include_subtasks: false opts out and reports hidden subtasks', async () => {
       mockPlugin([
-        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null, subTaskIds: ['child1'] }),
         task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
         task({ id: 'top1', title: 'Top level', dueWithTime: TODAY_MS + 11 * HOUR, timeEstimate: HOUR }),
       ]);
@@ -312,7 +322,7 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
 
     it('overlap clusters include subtask conflicts by default', async () => {
       mockPlugin([
-        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null, subTaskIds: ['child1', 'child2'] }),
         task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
         task({ id: 'child2', title: 'Child B', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR + 30 * 60 * 1000, timeEstimate: HOUR }),
       ]);
@@ -325,7 +335,7 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
 
     it('container parents (0 estimate, unplanned) never double-count or fake-conflict', async () => {
       mockPlugin([
-        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null, subTaskIds: ['child1'] }),
         task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
       ]);
       const data = okData(await callTool('get_schedule'));
@@ -335,9 +345,26 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
       expect(data.summary.totalDurationMs).toBe(HOUR);
     });
 
+    it('containers with a mutated (aggregated) estimate and a planned time NEVER schedule or fake-conflict', async () => {
+      // Regression for bug sp-parent-estimate-auto-aggregated: SP re-aggregates
+      // parent timeEstimate = sum of children on any child update; a parent that
+      // somehow gains a planned time must not render as an N-hour block
+      // overlapping its children.
+      mockPlugin([
+        task({ id: 'parent1', title: 'Container', timeEstimate: 2_400_000, dueWithTime: TODAY_MS + 9 * HOUR, subTaskIds: ['child1'] }),
+        task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+      ]);
+      const data = okData(await callTool('get_schedule'));
+      expect(data.scheduled.map((t: TaskFixture) => t.taskId)).toEqual(['child1']);
+      expect(data.overlaps).toHaveLength(0);
+      expect(data.summary.scheduledCount).toBe(1);
+      expect(data.summary.overlappingTaskCount).toBe(0);
+      expect(data.summary.totalDurationMs).toBe(HOUR);
+    });
+
     it('done subtasks land in completedInRange with include_done', async () => {
       mockPlugin([
-        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null }),
+        task({ id: 'parent1', title: 'Container', timeEstimate: 0, dueWithTime: null, subTaskIds: ['child1'] }),
         task({ id: 'child1', title: 'Child done', parentId: 'parent1', isDone: true, doneOn: TODAY_MS + 10 * HOUR, dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
       ]);
       const data = okData(await callTool('get_schedule', { include_done: true }));
@@ -410,6 +437,39 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
       expect(data.results).toHaveLength(2);
       expect(data.tasks.a.plannedTime).toBe(TODAY_MS + 9 * HOUR);
       expect(data.tasks.b.plannedTime).toBe(TODAY_MS + 11 * HOUR);
+    });
+
+    it('re-zeroes unplanned container parents after child writes (hygiene for SP aggregation)', async () => {
+      // SP re-aggregates parent timeEstimate = sum of children on any child
+      // update (bug sp-parent-estimate-auto-aggregated); the bulk echo pass
+      // must write the parent estimate back to 0 and include it in the echo.
+      mockPlugin([
+        task({ id: 'parent1', title: 'Container', timeEstimate: 2_400_000, dueWithTime: null, subTaskIds: ['child1'] }),
+        task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+      ]);
+      const data = okData(await callTool('bulk_update_tasks', {
+        updates: [{ task_id: 'child1', due_with_time: TODAY_MS + 10 * HOUR }],
+      }));
+      const bulkCalls = mockSend.mock.calls.filter(c => c[1] === 'bulkUpdateTasks');
+      expect(bulkCalls).toHaveLength(2);
+      expect(bulkCalls[1][2]).toEqual({ updates: [{ taskId: 'parent1', data: { timeEstimate: 0 } }] });
+      expect((data.tasks.parent1 as TaskFixture).timeEstimate).toBe(0);
+      expect((data.tasks.child1 as TaskFixture).plannedTime).toBe(TODAY_MS + 10 * HOUR);
+    });
+
+    it('leaves planned parents untouched by the re-zero pass', async () => {
+      // A parent WITH a planned time keeps whatever estimate it has — the
+      // container invariant only mandates unplanned parents stay at 0.
+      mockPlugin([
+        task({ id: 'parent1', title: 'Container', timeEstimate: 2_400_000, dueWithTime: TODAY_MS + 9 * HOUR, subTaskIds: ['child1'] }),
+        task({ id: 'child1', title: 'Child A', parentId: 'parent1', dueWithTime: TODAY_MS + 9 * HOUR, timeEstimate: HOUR }),
+      ]);
+      mockSend.mockResolvedValueOnce(mockResponse({ results: [{ id: 'child1', success: true }] }));
+      await callTool('bulk_update_tasks', {
+        updates: [{ task_id: 'child1', due_with_time: TODAY_MS + 10 * HOUR }],
+      });
+      const bulkCalls = mockSend.mock.calls.filter(c => c[1] === 'bulkUpdateTasks');
+      expect(bulkCalls).toHaveLength(1); // no re-zero write issued
     });
   });
 });

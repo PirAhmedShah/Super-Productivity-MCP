@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveSchedule, findOverlaps, localDateStr, plannedTimeOf } from '../../../src/tools/schedule.js';
+import { deriveSchedule, findOverlaps, isContainer, localDateStr, plannedTimeOf } from '../../../src/tools/schedule.js';
 
 const HOUR = 3_600_000;
 // Local 2026-08-04 09:00
@@ -30,6 +30,18 @@ describe('localDateStr / plannedTimeOf (moved helpers)', () => {
     expect(plannedTimeOf(task({ dueWithTime: NINE_AM }))).toBe(NINE_AM);
     expect(plannedTimeOf(task({ dueWithTime: null }))).toBeNull();
     expect(plannedTimeOf({ id: 'x' } as any)).toBeNull();
+  });
+});
+
+describe('isContainer', () => {
+  it('detects parents with subtasks as containers', () => {
+    expect(isContainer(task({ subTaskIds: ['c1', 'c2'] }))).toBe(true);
+  });
+
+  it('is false for leaves, missing/empty subTaskIds', () => {
+    expect(isContainer(task({ subTaskIds: [] }))).toBe(false);
+    expect(isContainer(task({ subTaskIds: undefined }))).toBe(false);
+    expect(isContainer(task())).toBe(false);
   });
 });
 
@@ -74,6 +86,23 @@ describe('deriveSchedule', () => {
     expect(zero.endMs).toBeNull();
     expect(zero.endTime).toBeNull();
     expect(zero.status).toBe('in-progress'); // started, unbounded
+  });
+
+  it('containers never carry a duration even with a mutated (aggregated) estimate', () => {
+    // SP core re-aggregates parent timeEstimate = sum of children (bug
+    // sp-parent-estimate-auto-aggregated); containers must still be unsized.
+    const s = deriveSchedule(task({ subTaskIds: ['c1'], timeEstimate: 2_400_000 }), NOW);
+    expect(s.hasDuration).toBe(false);
+    expect(s.endMs).toBeNull();
+    expect(s.endTime).toBeNull();
+    expect(s.durationMs).toBeNull();
+  });
+
+  it('planned containers report a start but no duration', () => {
+    const s = deriveSchedule(task({ subTaskIds: ['c1'], timeEstimate: 2_400_000 }), NOW);
+    expect(s.startMs).toBe(NINE_AM);
+    expect(s.startTime).toBe('09:00');
+    expect(s.status).toBe('in-progress');
   });
 });
 

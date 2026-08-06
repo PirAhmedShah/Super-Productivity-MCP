@@ -261,7 +261,7 @@ describe('integration: tools over the MCP protocol', () => {
           { type: 'reorder', task_ids: ['tmp1', 'real-1'] },
         ],
       });
-      const [, action, fields] = mockSend.mock.calls.at(-1)! as unknown as [unknown, string, Record<string, unknown>];
+      const [, action, fields] = mockSend.mock.calls.find(c => c[1] === 'batchUpdateForProject')! as unknown as [unknown, string, Record<string, unknown>];
       expect(action).toBe('batchUpdateForProject');
       expect((fields.data as { projectId: string }).projectId).toBe('p1');
       expect(fields.data).toMatchObject({

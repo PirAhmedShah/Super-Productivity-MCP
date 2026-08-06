@@ -25,6 +25,7 @@ interface TaskRecord {
   timeSpent: number;
   doneOn?: number | null;
   repeatCfgId?: string | null;
+  subTaskIds?: string[];
   [key: string]: unknown;
 }
 
@@ -58,6 +59,37 @@ export async function fetchTasksByIds(
 async function fetchTask(dirs: ResolvedDirs, taskId: string): Promise<Record<string, unknown> | null> {
   const tasks = await fetchTasksByIds(dirs, [taskId]);
   return tasks[taskId] ?? null;
+}
+
+/**
+ * Write-side hygiene for the container model: SP core re-aggregates a parent's
+ * timeEstimate as the sum of its children's estimates whenever a child is
+ * updated (see bug-report sp-parent-estimate-auto-aggregated). After touching
+ * tasks, re-zero timeEstimate on any CONTAINER parent (has subtasks) that is
+ * not itself planned (no dueWithTime). The parent write itself sticks — only
+ * child updates trigger SP's aggregation. Returns the ids of re-zeroed parents
+ * so callers can include them in their echo.
+ */
+export async function rezeroUnplannedParents(
+  dirs: ResolvedDirs,
+  touchedTaskIds: string[],
+): Promise<string[]> {
+  const touched = new Set(touchedTaskIds);
+  if (!touched.size) return [];
+  const res = await sendCommand(dirs, 'getTasks', { filters: { includeDone: true, includeArchived: true } });
+  if (!res.success) return [];
+  const tasks = (res.result as TaskRecord[]) ?? [];
+  const parentIds = new Set<string>();
+  for (const t of tasks) {
+    if (t.parentId && touched.has(t.id)) parentIds.add(t.parentId);
+  }
+  if (!parentIds.size) return [];
+  const fixes = tasks
+    .filter(t => parentIds.has(t.id) && !t.dueWithTime && (t.subTaskIds?.length ?? 0) > 0 && (t.timeEstimate ?? 0) > 0)
+    .map(t => ({ taskId: t.id, data: { timeEstimate: 0 } }));
+  if (!fixes.length) return [];
+  const fixRes = await sendCommand(dirs, 'bulkUpdateTasks', { updates: fixes });
+  return fixRes.success ? fixes.map(f => f.taskId) : [];
 }
 
 /** Apply triage filters to a task list. Exported for testability. */
@@ -561,7 +593,9 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
       }));
       const res = await sendCommand(dirs, 'bulkUpdateTasks', { updates: mapped });
       if (!res.success) return errorResult(res.error ?? 'Failed to bulk update tasks');
-      const tasks = await fetchTasksByIds(dirs, (updates ?? []).map(u => u.task_id));
+      const touchedIds = (updates ?? []).map(u => u.task_id);
+      const rezeroed = await rezeroUnplannedParents(dirs, touchedIds);
+      const tasks = await fetchTasksByIds(dirs, [...touchedIds, ...rezeroed]);
       return okResult({ ...((res.result as Record<string, unknown> | null) ?? {}), tasks });
     },
   );

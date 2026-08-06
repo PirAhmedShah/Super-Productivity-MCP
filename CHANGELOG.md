@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions align with the SP plugin manifest and the npm package.
 
+## [1.8.3] — 2026-08-06
+
+### Fixed
+- **Parents (containers) can never schedule or fake-conflict** (#12) — SP core silently re-aggregates a parent's `timeEstimate` to the sum of its children on ANY child update (even one that touches no estimate), and `bulk_update_tasks`' echo only returned the touched children, so the drift was invisible. Fix, two layers:
+  - **Read-side (core):** `get_schedule` / `sp://context` now exclude tasks with `subTaskIds` from `scheduled` (and therefore from overlap clusters) regardless of planned time or mutated estimate; `deriveSchedule` reports containers as always unsized (`hasDuration: false`). A container can no longer render as an N-hour block overlapping its children, no matter what SP writes onto it.
+  - **Write-side (hygiene):** `bulk_update_tasks` and `batch_update_project` re-zero `timeEstimate = 0` on unplanned container parents of touched children (one extra getTasks on the existing echo fetch) and include them in the echo / `rezeroedParentIds` — stored data stays consistent with the container model for `get_app_state` snapshots and triage.
+- 7 new tests (2 `deriveSchedule`/`isContainer` unit, 3 `get_schedule` handler incl. the mutated-parent regression, 2 `bulk_update_tasks` hygiene) — 266 pass.
+
 ## [1.8.2] — 2026-08-05
 
 ### Fixed

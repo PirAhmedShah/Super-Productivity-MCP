@@ -1,6 +1,6 @@
 // MCP Bridge Plugin for Super Productivity
 // Keep PLUGIN_VERSION in sync with manifest.json "version".
-const PLUGIN_VERSION = '1.8.2';
+const PLUGIN_VERSION = '1.8.3';
 const PROTOCOL_VERSION = 1;
 // This plugin is built for SP 18.16.0 only; older builds are refused with a clear error
 // instead of silently degrading (no marker-only timer fallback, no legacy plannedAt paths).

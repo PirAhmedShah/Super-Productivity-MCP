@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { sendCommand } from '../ipc/command-sender.js';
 import type { ResolvedDirs } from '../ipc/directories.js';
 import { errorResult, okResult } from './result.js';
+import { rezeroUnplannedParents } from './tasks.js';
 
 // SP 18.16+ batchUpdateForProject — atomic multi-op writes for one project.
 // Snake_case agent-facing schema maps onto SP's BatchOperation shape.
@@ -99,10 +100,13 @@ export function registerBatchTools(server: McpServer, dirs: ResolvedDirs): void 
       });
       if (!res.success) return errorResult(res.error ?? 'Failed to apply batch');
       const r = (res.result ?? {}) as { success?: boolean; createdTaskIds?: Record<string, string>; errors?: unknown[] };
+      const touchedRealIds = operations.filter(o => o.type === 'update').map(o => o.task_id);
+      const rezeroed = await rezeroUnplannedParents(dirs, touchedRealIds);
       return okResult({
         success: r.success ?? true,
         createdTaskIds: r.createdTaskIds ?? {},
         errors: r.errors ?? [],
+        rezeroedParentIds: rezeroed.length > 0 ? rezeroed : null,
       });
     },
   );
