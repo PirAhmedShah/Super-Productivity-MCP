@@ -45,11 +45,11 @@ describe('toSpOperation mapping (batch_update_project)', () => {
     expect(toSpOperation({
       type: 'update',
       task_id: 'real-1',
-      updates: { due_with_time: 1785925818183 },
+      updates: { due_with_time: 1785925800000 },
     })).toEqual({
       type: 'update',
       taskId: 'real-1',
-      updates: { dueWithTime: 1785925818183 },
+      updates: { dueWithTime: 1785925800000 },
     });
     expect(toSpOperation({
       type: 'update',
@@ -59,6 +59,18 @@ describe('toSpOperation mapping (batch_update_project)', () => {
       type: 'update',
       taskId: 'real-1',
       updates: { dueWithTime: null },
+    });
+  });
+
+  it('floors sub-minute due_with_time to the whole minute (no invisible overlaps)', () => {
+    expect(toSpOperation({
+      type: 'update',
+      task_id: 'real-1',
+      updates: { due_with_time: 1785925818183 },
+    })).toEqual({
+      type: 'update',
+      taskId: 'real-1',
+      updates: { dueWithTime: 1785925800000 },
     });
   });
 

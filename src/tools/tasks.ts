@@ -6,6 +6,7 @@ import type { TaskFilters } from '../ipc/types.js';
 import { deriveSchedule, findOverlaps, localDateStr, plannedTimeOf, type ScheduleBlock } from './schedule.js';
 import { enrichTask, loadRefs, type Refs } from '../enrich.js';
 import { errorResult, okResult } from './result.js';
+import { minuteFloor } from './time.js';
 
 // Re-export for consumers that previously imported these from tasks.js.
 export { localDateStr, plannedTimeOf } from './schedule.js';
@@ -378,7 +379,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         notes: z.string().optional().describe('New notes'),
         is_done: z.boolean().optional().describe('Mark as done/undone'),
         due_day: z.string().optional().describe('Due date in ISO format (e.g. 2026-04-20), or empty string to clear'),
-        due_with_time: z.number().nullable().optional().describe('Unix ms timestamp to plan task at an exact time (maps to SP dueWithTime; e.g. Date.now() = "plan from now until next task"). Pass null to unplan. Independent from due_day.'),
+        due_with_time: z.number().nullable().optional().describe('Unix ms timestamp to plan task at an exact time (maps to SP dueWithTime; e.g. Date.now() = "plan from now until next task"). Floored to the whole minute on write — 1 minute is the smallest scheduling unit. Pass null to unplan. Independent from due_day.'),
         time_estimate: z.number().optional().describe('Time estimate in milliseconds'),
         time_spent: z.number().optional().describe('Time spent in milliseconds'),
         time_spent_on_day: z
@@ -399,7 +400,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
         data.doneOn = is_done ? Date.now() : null;
       }
       if (due_day !== undefined) data.dueDay = due_day || null;
-      if (due_with_time !== undefined) data.dueWithTime = due_with_time;
+      if (due_with_time !== undefined) data.dueWithTime = due_with_time === null ? null : minuteFloor(due_with_time);
       if (time_estimate !== undefined) data.timeEstimate = time_estimate;
       if (time_spent !== undefined) data.timeSpent = time_spent;
       if (time_spent_on_day !== undefined) data.time_spent_on_day = time_spent_on_day;
@@ -564,7 +565,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
           title: z.string().optional().describe('New title'),
           notes: z.string().optional().describe('New notes'),
           due_day: z.string().optional().describe('Due date (YYYY-MM-DD) or empty string to clear'),
-          due_with_time: z.number().nullable().optional().describe('Unix ms timestamp to plan the task at an exact time (maps to SP dueWithTime). Pass null to unplan. Independent from due_day.'),
+          due_with_time: z.number().nullable().optional().describe('Unix ms timestamp to plan the task at an exact time (maps to SP dueWithTime). Floored to the whole minute on write — 1 minute is the smallest scheduling unit. Pass null to unplan. Independent from due_day.'),
           is_done: z.boolean().optional().describe('Mark as done/undone'),
           tag_ids: z.array(z.string()).optional().describe('Replace all tags'),
           time_estimate: z.number().optional().describe('Time estimate in ms'),
@@ -583,7 +584,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
           ...(u.title !== undefined && { title: u.title }),
           ...(u.notes !== undefined && { notes: u.notes }),
           ...(u.due_day !== undefined && { dueDay: u.due_day || null }),
-          ...(u.due_with_time !== undefined && { dueWithTime: u.due_with_time }),
+          ...(u.due_with_time !== undefined && { dueWithTime: u.due_with_time === null ? null : minuteFloor(u.due_with_time) }),
           ...(u.is_done !== undefined && { isDone: u.is_done, doneOn: u.is_done ? Date.now() : null }),
           ...(u.tag_ids !== undefined && { tagIds: u.tag_ids }),
           ...(u.time_estimate !== undefined && { timeEstimate: u.time_estimate }),
@@ -694,7 +695,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
       description: 'Plan multiple tasks for today (adds to Today view) or unplan them. By default tasks are pinned to start-of-day (00:00); use plan_from_now for "from now until next task". Uses partial-success semantics.',
       inputSchema: {
         task_ids: z.array(z.string()).max(100).describe('Task IDs to plan/unplan'),
-        plan_from_now: z.boolean().optional().default(false).describe('If true, plans tasks at the current time (Date.now()) instead of start-of-day (00:00). Recommended when an exact start time matters.'),
+        plan_from_now: z.boolean().optional().default(false).describe('If true, plans tasks at the current time (floored to the whole minute — 1 minute is the smallest scheduling unit) instead of start-of-day (00:00). Recommended when an exact start time matters.'),
         unplan: z.boolean().optional().default(false).describe('If true, removes tasks from today instead of planning them'),
       },
     },
@@ -704,7 +705,7 @@ export function registerTaskTools(server: McpServer, dirs: ResolvedDirs): void {
       const dueWithTime = unplan
         ? null
         : plan_from_now
-          ? now.getTime()
+          ? minuteFloor(now.getTime())
           : new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
       const updates = task_ids.map(id => ({ taskId: id, data: { dueWithTime } }));
       const res = await sendCommand(dirs, 'bulkUpdateTasks', { updates });

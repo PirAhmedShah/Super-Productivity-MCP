@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions align with the SP plugin manifest and the npm package.
 
+## [1.8.4] — 2026-08-08
+
+### Fixed
+- **Sub-minute planned times create invisible overlaps** (#13) — every planned-time write passed `due_with_time` verbatim (`plan_tasks_for_today(plan_from_now)` wrote raw `Date.now()`, carrying seconds+ms), while SP and `get_schedule` render times at HH:mm only. A task planned at 15:45:46.715 with a 45m estimate ended at 16:30:46.715 — a real 41s overlap with the next block at 16:30:05.204 that no rendered time showed. Fix: **minute-normalization at the write boundary** in all four paths — `plan_tasks_for_today` (`plan_from_now`), `update_task`, `bulk_update_tasks`, and `batch_update_project` (`toSpOperation`) now floor `due_with_time` to the whole minute via a shared `minuteFloor` helper (`Math.floor(ms/60000)*60000`); `null` unplan passes through untouched. 1 minute is now the documented smallest scheduling unit (tool schemas + README). `get_time` intentionally stays the raw wall clock — normalization is a write-side guarantee, so agents passing `epochMs` straight through are safe either way. 11 new tests (4 `minuteFloor` unit, 1 batch mapping + 1 updated, 2 `update_task`, 3 `plan_tasks_for_today`, 1 `bulk_update_tasks`) — 277 pass.
+
 ## [1.8.3] — 2026-08-06
 
 ### Fixed

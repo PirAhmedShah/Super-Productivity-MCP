@@ -393,6 +393,14 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
       expect(lastBulkPayload()).toEqual([{ taskId: 'a', data: { dueWithTime: null } }]);
     });
 
+    it('floors sub-minute due_with_time to the whole minute (no invisible overlaps)', async () => {
+      mockPlugin([]);
+      await callTool('bulk_update_tasks', {
+        updates: [{ task_id: 'a', due_with_time: TODAY_MS + 9 * HOUR + 30_000 + 700 }],
+      });
+      expect(lastBulkPayload()).toEqual([{ taskId: 'a', data: { dueWithTime: TODAY_MS + 9 * HOUR } }]);
+    });
+
     it('maps is_done true to isDone + doneOn and false to isDone + doneOn null', async () => {
       mockPlugin([]);
       await callTool('bulk_update_tasks', {
@@ -470,6 +478,57 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
       });
       const bulkCalls = mockSend.mock.calls.filter(c => c[1] === 'bulkUpdateTasks');
       expect(bulkCalls).toHaveLength(1); // no re-zero write issued
+    });
+  });
+
+  describe('update_task', () => {
+    function lastUpdatePayload(): { taskId: string; data: Record<string, unknown> } {
+      const calls = mockSend.mock.calls.filter(c => c[1] === 'updateTask');
+      return calls[calls.length - 1][2] as { taskId: string; data: Record<string, unknown> };
+    }
+
+    it('floors sub-minute due_with_time to the whole minute', async () => {
+      mockPlugin([]);
+      await callTool('update_task', { task_id: 'a', due_with_time: TODAY_MS + 9 * HOUR + 30_000 + 700 });
+      expect(lastUpdatePayload()).toEqual({ taskId: 'a', data: { dueWithTime: TODAY_MS + 9 * HOUR } });
+    });
+
+    it('passes null through as an unplan (not floored)', async () => {
+      mockPlugin([]);
+      await callTool('update_task', { task_id: 'a', due_with_time: null });
+      expect(lastUpdatePayload()).toEqual({ taskId: 'a', data: { dueWithTime: null } });
+    });
+  });
+
+  describe('plan_tasks_for_today', () => {
+    function lastPlanPayload(): { taskId: string; data: Record<string, unknown> }[] {
+      const calls = mockSend.mock.calls.filter(c => c[1] === 'bulkUpdateTasks');
+      return (calls[calls.length - 1][2] as { updates: { taskId: string; data: Record<string, unknown> }[] }).updates;
+    }
+
+    it('plan_from_now writes a whole-minute timestamp (never raw Date.now())', async () => {
+      mockPlugin([]);
+      const before = Date.now();
+      await callTool('plan_tasks_for_today', { task_ids: ['a'], plan_from_now: true });
+      const dueWithTime = lastPlanPayload()[0].data.dueWithTime as number;
+      expect(dueWithTime % 60_000).toBe(0);
+      expect(dueWithTime).toBeGreaterThanOrEqual(Math.floor(before / 60_000) * 60_000);
+      expect(dueWithTime).toBeLessThanOrEqual(before + 60_000);
+    });
+
+    it('default pins to start-of-day (already a whole minute)', async () => {
+      mockPlugin([]);
+      await callTool('plan_tasks_for_today', { task_ids: ['a'] });
+      const dueWithTime = lastPlanPayload()[0].data.dueWithTime as number;
+      expect(dueWithTime % 60_000).toBe(0);
+      expect(new Date(dueWithTime).getHours()).toBe(0);
+      expect(new Date(dueWithTime).getMinutes()).toBe(0);
+    });
+
+    it('unplan passes null through', async () => {
+      mockPlugin([]);
+      await callTool('plan_tasks_for_today', { task_ids: ['a'], unplan: true });
+      expect(lastPlanPayload()).toEqual([{ taskId: 'a', data: { dueWithTime: null } }]);
     });
   });
 });

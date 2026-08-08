@@ -3,6 +3,18 @@ import { okResult } from './result.js';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
 
+const MINUTE_MS = 60_000;
+
+/**
+ * Floor a unix-ms timestamp to the start of its whole minute. Scheduling
+ * granularity is 1 minute (SP renders HH:mm only — sub-minute times create
+ * invisible overlaps), so every planned-time write is normalized down to a
+ * whole minute before it reaches SP.
+ */
+export function minuteFloor(ms: number): number {
+  return Math.floor(ms / MINUTE_MS) * MINUTE_MS;
+}
+
 /** Current wall-clock context for the agent. Exported for testability. */
 export function timePayload(d: Date = new Date()): {
   iso: string;
