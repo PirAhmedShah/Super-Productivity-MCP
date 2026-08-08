@@ -4,7 +4,7 @@ import { sendCommand } from '../ipc/command-sender.js';
 import type { ResolvedDirs } from '../ipc/directories.js';
 import { errorResult, okResult } from './result.js';
 import { minuteFloor } from './time.js';
-import { rezeroUnplannedParents } from './tasks.js';
+import { fetchTasksByIds, rezeroUnplannedParents } from './tasks.js';
 
 // SP 18.16+ batchUpdateForProject — atomic multi-op writes for one project.
 // Snake_case agent-facing schema maps onto SP's BatchOperation shape.
@@ -72,7 +72,9 @@ export function toSpOperation(op: BatchOperation): Record<string, unknown> {
       if (op.updates.is_done !== undefined) u.isDone = op.updates.is_done;
       if (op.updates.parent_id !== undefined) u.parentId = op.updates.parent_id;
       if (op.updates.time_estimate !== undefined) u.timeEstimate = op.updates.time_estimate;
-      if (op.updates.due_with_time !== undefined) u.dueWithTime = op.updates.due_with_time === null ? null : minuteFloor(op.updates.due_with_time);
+      // NOTE: due_with_time is deliberately NOT mapped into the SP batch payload —
+      // SP's batch reducer silently drops dueWithTime on update ops (see issue #14).
+      // Planned times are applied via a bulkUpdateTasks follow-up instead.
       if (op.updates.sub_task_ids !== undefined) u.subTaskIds = op.updates.sub_task_ids;
       return { type: 'update', taskId: op.task_id, updates: u };
     }
@@ -81,6 +83,22 @@ export function toSpOperation(op: BatchOperation): Record<string, unknown> {
     case 'reorder':
       return { type: 'reorder', taskIds: op.task_ids };
   }
+}
+
+/**
+ * Split planned-time updates out of the batch (SP's batch reducer drops
+ * dueWithTime silently). Values are floored to the whole minute; null = unplan.
+ * Exported for testability.
+ */
+export function extractPlannedTimeUpdates(operations: BatchOperation[]): { taskId: string; dueWithTime: number | null }[] {
+  const out: { taskId: string; dueWithTime: number | null }[] = [];
+  for (const op of operations) {
+    if (op.type !== 'update') continue;
+    const dt = op.updates.due_with_time;
+    if (dt === undefined) continue;
+    out.push({ taskId: op.task_id, dueWithTime: dt === null ? null : minuteFloor(dt) });
+  }
+  return out;
 }
 
 export function registerBatchTools(server: McpServer, dirs: ResolvedDirs): void {
@@ -96,18 +114,35 @@ export function registerBatchTools(server: McpServer, dirs: ResolvedDirs): void 
     },
     async ({ project_id, operations }) => {
       if (!project_id?.trim()) return errorResult('project_id is required');
+      const planned = extractPlannedTimeUpdates(operations);
       const res = await sendCommand(dirs, 'batchUpdateForProject', {
         data: { projectId: project_id, operations: operations.map(toSpOperation) },
       });
       if (!res.success) return errorResult(res.error ?? 'Failed to apply batch');
       const r = (res.result ?? {}) as { success?: boolean; createdTaskIds?: Record<string, string>; errors?: unknown[] };
+      const errors = [...((r.errors ?? []) as unknown[])];
+      let plannedTimeApplied = 0;
+      if (planned.length > 0) {
+        try {
+          const followUp = await sendCommand(dirs, 'bulkUpdateTasks', {
+            updates: planned.map(p => ({ taskId: p.taskId, data: { dueWithTime: p.dueWithTime } })),
+          });
+          if (!followUp.success) throw new Error(followUp.error ?? 'unknown error');
+          plannedTimeApplied = planned.length;
+        } catch (e) {
+          errors.push(`planned-time follow-up failed: ${(e as Error).message}`);
+        }
+      }
       const touchedRealIds = operations.filter(o => o.type === 'update').map(o => o.task_id);
       const rezeroed = await rezeroUnplannedParents(dirs, touchedRealIds);
+      const tasks = await fetchTasksByIds(dirs, [...touchedRealIds, ...rezeroed]);
       return okResult({
         success: r.success ?? true,
         createdTaskIds: r.createdTaskIds ?? {},
-        errors: r.errors ?? [],
+        errors,
+        plannedTimeApplied,
         rezeroedParentIds: rezeroed.length > 0 ? rezeroed : null,
+        tasks,
       });
     },
   );
