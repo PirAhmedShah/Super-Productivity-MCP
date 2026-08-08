@@ -1,6 +1,6 @@
 {
   "name": "@pir-ahmed-shah/super-productivity-mcp",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "description": "MCP server for Super Productivity — manage tasks, projects, and tags via AI assistants",
   "main": "dist/index.js",
   "bin": {

@@ -7,6 +7,7 @@ vi.mock('../../../src/ipc/command-sender.js', () => ({
 
 import { sendCommand } from '../../../src/ipc/command-sender.js';
 import { registerTaskTools } from '../../../src/tools/tasks.js';
+import { registerBatchTools } from '../../../src/tools/batch.js';
 import { registerScheduleTools, localDateStr } from '../../../src/tools/schedule.js';
 import { invalidateRefs } from '../../../src/enrich.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -51,7 +52,10 @@ function mockResponse(result: unknown): Response {
 // Drive the plugin side: getTasks returns ALL fixtures (server-side filtering is the
 // source of truth in this codebase), and getAllProjects/getAllTags feed enrichment.
 // bulkUpdateTasks applies its data merges to the fixtures (like SP's reducer), so
-// follow-up reads observe the writes.
+// follow-up reads observe the writes. batchUpdateForProject mirrors SP's ACTUAL
+// whitelist behavior: update ops apply only title/notes/isDone/timeEstimate/
+// subTaskIds/parentId — dueWithTime is deliberately NOT applied (SP silently
+// drops it; that's exactly what the two-phase split works around).
 function mockPlugin(tasks: TaskFixture[]): void {
   mockSend.mockImplementation(async (_d: ResolvedDirs, action: string, fields?: Record<string, unknown>) => {
     if (action === 'getAllProjects') return mockResponse(PROJECTS);
@@ -64,6 +68,28 @@ function mockPlugin(tasks: TaskFixture[]): void {
         if (t) Object.assign(t, u.data);
       }
       return mockResponse({ results: updates.map(u => ({ id: u.taskId, success: true })) });
+    }
+    if (action === 'batchUpdateForProject') {
+      const ops = ((fields?.data as Record<string, unknown>)?.operations ?? []) as Record<string, unknown>[];
+      const createdTaskIds: Record<string, string> = {};
+      for (const op of ops) {
+        if (op.type === 'update') {
+          const o = op as { taskId: string; updates: Record<string, unknown> };
+          const t = tasks.find(t => t.id === o.taskId);
+          if (t) {
+            const changes: Record<string, unknown> = {};
+            for (const f of ['title', 'notes', 'isDone', 'timeEstimate', 'subTaskIds', 'parentId']) {
+              if (o.updates[f] !== undefined) changes[f] = o.updates[f];
+            }
+            Object.assign(t, changes);
+          }
+        }
+        if (op.type === 'create') {
+          const o = op as { tempId: string };
+          createdTaskIds[o.tempId] = 'real-' + o.tempId;
+        }
+      }
+      return mockResponse({ success: true, createdTaskIds, errors: [] });
     }
     return mockResponse(null);
   });
@@ -98,6 +124,7 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
     invalidateRefs(dirs);
     Object.keys(registeredTools).forEach(k => delete registeredTools[k]);
     registerTaskTools(mockServer, dirs);
+    registerBatchTools(mockServer, dirs);
     registerScheduleTools(mockServer, dirs);
   });
 
@@ -529,6 +556,96 @@ describe('tool handlers (full pipeline: fetch → filter → enrich)', () => {
       mockPlugin([]);
       await callTool('plan_tasks_for_today', { task_ids: ['a'], unplan: true });
       expect(lastPlanPayload()).toEqual([{ taskId: 'a', data: { dueWithTime: null } }]);
+    });
+  });
+
+  describe('batch_update_project (two-phase split: SP batch + planned-time follow-up)', () => {
+    function batchCalls(): { action: string; fields: Record<string, unknown> }[] {
+      return mockSend.mock.calls.map(c => ({ action: c[1] as string, fields: (c[2] ?? {}) as Record<string, unknown> }));
+    }
+
+    it('never sends dueWithTime to SP batch; applies it via a bulkUpdateTasks follow-up, floored', async () => {
+      mockPlugin([task({ id: 'real-1', title: 'A', dueWithTime: TODAY_MS + 9 * HOUR })]);
+      const data = okData(await callTool('batch_update_project', {
+        project_id: 'p1',
+        operations: [
+          { type: 'update', task_id: 'real-1', updates: { title: 'B', due_with_time: TODAY_MS + 10 * HOUR + 30_000 + 700 } },
+        ],
+      }));
+      const calls = batchCalls();
+      const batchPayload = calls.find(c => c.action === 'batchUpdateForProject')!.fields;
+      expect((batchPayload.data as { operations: { updates: Record<string, unknown> }[] }).operations[0].updates)
+        .toEqual({ title: 'B' });
+      const followUp = calls.filter(c => c.action === 'bulkUpdateTasks');
+      expect(followUp).toHaveLength(1);
+      expect(followUp[0].fields.updates).toEqual([{ taskId: 'real-1', data: { dueWithTime: TODAY_MS + 10 * HOUR } }]);
+      expect(data.plannedTimeApplied).toBe(1);
+      expect(data.tasks['real-1'].dueWithTime).toBe(TODAY_MS + 10 * HOUR);
+      expect(data.tasks['real-1'].title).toBe('B');
+      expect(data.errors).toEqual([]);
+    });
+
+    it('passes null through the follow-up as an unplan', async () => {
+      mockPlugin([task({ id: 'real-1', title: 'A', dueWithTime: TODAY_MS + 9 * HOUR })]);
+      const data = okData(await callTool('batch_update_project', {
+        project_id: 'p1',
+        operations: [
+          { type: 'update', task_id: 'real-1', updates: { due_with_time: null } },
+        ],
+      }));
+      const calls = batchCalls();
+      const followUp = calls.filter(c => c.action === 'bulkUpdateTasks');
+      expect(followUp).toHaveLength(1);
+      expect(followUp[0].fields.updates).toEqual([{ taskId: 'real-1', data: { dueWithTime: null } }]);
+      expect(data.tasks['real-1'].dueWithTime).toBeNull();
+    });
+
+    it('skips the follow-up entirely when no op carries due_with_time', async () => {
+      mockPlugin([task({ id: 'real-1', title: 'A' })]);
+      await callTool('batch_update_project', {
+        project_id: 'p1',
+        operations: [
+          { type: 'update', task_id: 'real-1', updates: { title: 'B' } },
+          { type: 'reorder', task_ids: ['real-1'] },
+        ],
+      });
+      const calls = batchCalls();
+      expect(calls.filter(c => c.action === 'bulkUpdateTasks')).toHaveLength(0);
+    });
+
+    it('surfaces the batch failure and does NOT run the follow-up', async () => {
+      mockPlugin([task({ id: 'real-1', title: 'A' })]);
+      mockSend.mockResolvedValueOnce({ success: false, error: 'taskId real-1 not found', timestamp: Date.now() });
+      const res = await callTool('batch_update_project', {
+        project_id: 'p1',
+        operations: [
+          { type: 'update', task_id: 'real-1', updates: { title: 'B', due_with_time: TODAY_MS + 10 * HOUR } },
+        ],
+      });
+      expect(errMsg(res)).toMatch(/taskId real-1 not found/);
+      const calls = batchCalls();
+      expect(calls.filter(c => c.action === 'bulkUpdateTasks')).toHaveLength(0);
+    });
+
+    it('reports a failed follow-up in errors without claiming it applied', async () => {
+      mockPlugin([task({ id: 'real-1', title: 'A' })]);
+      mockSend.mockImplementation(async (_d, action, fields) => {
+        if (action === 'batchUpdateForProject') return mockResponse({ success: true, createdTaskIds: {}, errors: [] });
+        if (action === 'bulkUpdateTasks') return { success: false, error: 'plugin exploded', timestamp: Date.now() };
+        if (action === 'getAllProjects') return mockResponse(PROJECTS);
+        if (action === 'getAllTags') return mockResponse(TAGS);
+        if (action === 'getTasks') return mockResponse([task({ id: 'real-1', title: 'A' })]);
+        return mockResponse(null);
+      });
+      const data = okData(await callTool('batch_update_project', {
+        project_id: 'p1',
+        operations: [
+          { type: 'update', task_id: 'real-1', updates: { due_with_time: TODAY_MS + 10 * HOUR } },
+        ],
+      }));
+      expect(data.success).toBe(true);
+      expect(data.plannedTimeApplied).toBe(0);
+      expect(data.errors[0]).toMatch(/planned-time follow-up failed/);
     });
   });
 });

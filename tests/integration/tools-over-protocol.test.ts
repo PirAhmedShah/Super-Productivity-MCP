@@ -57,10 +57,35 @@ interface ToolClient {
 }
 
 async function withServer(tasks: Record<string, unknown>[]): Promise<ToolClient> {
-  mockSend.mockImplementation(async (_d: ResolvedDirs, action: string) => {
+  mockSend.mockImplementation(async (_d: ResolvedDirs, action: string, fields?: Record<string, unknown>) => {
     if (action === 'getAllProjects') return mockResponse(PROJECTS);
     if (action === 'getAllTags') return mockResponse(TAGS);
     if (action === 'getTasks') return mockResponse(tasks);
+    if (action === 'bulkUpdateTasks') {
+      const updates = (fields?.updates ?? []) as { taskId: string; data: Record<string, unknown> }[];
+      for (const u of updates) {
+        const t = tasks.find(t => t.id === u.taskId);
+        if (t) Object.assign(t, u.data);
+      }
+      return mockResponse({ results: updates.map(u => ({ id: u.taskId, success: true })) });
+    }
+    if (action === 'batchUpdateForProject') {
+      const ops = ((fields?.data as Record<string, unknown>)?.operations ?? []) as Record<string, unknown>[];
+      for (const op of ops) {
+        if (op.type === 'update') {
+          const o = op as { taskId: string; updates: Record<string, unknown> };
+          const t = tasks.find(t => t.id === o.taskId);
+          if (t) {
+            const changes: Record<string, unknown> = {};
+            for (const f of ['title', 'notes', 'isDone', 'timeEstimate', 'subTaskIds', 'parentId']) {
+              if (o.updates[f] !== undefined) changes[f] = o.updates[f];
+            }
+            Object.assign(t, changes);
+          }
+        }
+      }
+      return mockResponse({ success: true, createdTaskIds: {}, errors: [] });
+    }
     return mockResponse(null);
   });
 
@@ -292,6 +317,31 @@ describe('integration: tools over the MCP protocol', () => {
       const payload = JSON.parse(msg.result.content[0].text);
       expect(payload.success).toBe(false);
       expect(payload.errors).toContain('taskId real-1 not found');
+    } finally {
+      await c.close();
+    }
+  });
+
+  it('batch_update_project splits due_with_time into a bulkUpdateTasks follow-up (no silent drop)', async () => {
+    const c = await withServer([task({ id: 'real-1', title: 'A', dueWithTime: TODAY_MS + 9 * HOUR })]);
+    try {
+      const msg = await c.call('batch_update_project', {
+        project_id: 'p1',
+        operations: [
+          { type: 'update', task_id: 'real-1', updates: { title: 'B', due_with_time: TODAY_MS + 10 * HOUR + 30_000 + 700 } },
+        ],
+      });
+      expect(msg.result.isError).toBeFalsy();
+      const payload = JSON.parse(msg.result.content[0].text);
+      const [, batchAction, batchFields] = mockSend.mock.calls.find(c => c[1] === 'batchUpdateForProject')! as unknown as [unknown, string, Record<string, unknown>];
+      expect((batchFields.data as { operations: { updates: Record<string, unknown> }[] }).operations[0].updates)
+        .toEqual({ title: 'B' }); // dueWithTime NEVER enters the SP batch payload
+      const [, bulkAction, bulkFields] = mockSend.mock.calls.find(c => c[1] === 'bulkUpdateTasks')! as unknown as [unknown, string, Record<string, unknown>];
+      expect(bulkAction).toBe('bulkUpdateTasks');
+      expect(bulkFields.updates).toEqual([{ taskId: 'real-1', data: { dueWithTime: TODAY_MS + 10 * HOUR } }]);
+      expect(payload.plannedTimeApplied).toBe(1);
+      expect(payload.tasks['real-1'].title).toBe('B');
+      expect(payload.tasks['real-1'].dueWithTime).toBe(TODAY_MS + 10 * HOUR);
     } finally {
       await c.close();
     }

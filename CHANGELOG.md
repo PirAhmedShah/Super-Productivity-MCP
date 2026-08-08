@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions align with the SP plugin manifest and the npm package.
 
+## [1.8.5] — 2026-08-08
+
+### Fixed
+- **`batch_update_project` update-op `due_with_time` was a silent no-op on SP 18.16.0** (#14, found live during 1.8.4 verification) — the tool advertised exact-time rescheduling in atomic batches since 1.8.2, but SP's batch engine only copies `title/notes/isDone/parentId/timeEstimate/subTaskIds` onto tasks in update ops and silently drops everything else: `success: true, errors: []` while the planned time never changed. Root cause pinned to SP core (its own `BatchTaskUpdate` type in `packages/plugin-api/src/types.ts` and the whitelist in `task-batch-update.reducer.ts` — no SP core fix possible, so the contract moved). Fix: **two-phase split** — `due_with_time` is never sent into SP's batch payload anymore; it is applied immediately after the batch via the proven `bulkUpdateTasks` path (minute-floored; `null` unplans). The call now reports `plannedTimeApplied`, surfaces follow-up failures under `errors` with a "planned-time follow-up failed" prefix, and **echoes the affected tasks under `tasks`** so one call is fully verifiable. 9 new tests (4 `extractPlannedTimeUpdates` units, 5 handler-flow, 1 integration) — 286 pass; mutation testing: 5/5 new mutants killed (extract rounding, payload leak, dropped follow-up, null guard, helper regression). Related SP-core quirk documented in #14: batch updates do not stamp `modified` (bypasses `task-shared-crud`'s timestamping) — informational only, no MCP impact.
+
 ## [1.8.4] — 2026-08-08
 
 ### Fixed
